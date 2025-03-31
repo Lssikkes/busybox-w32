@@ -170,6 +170,10 @@
 
 #include "libbb.h"
 
+#if ENABLE_PLATFORM_MINGW32
+#include <windows.h>
+#endif
+
 #if 0
 # define log_io(...) bb_error_msg(__VA_ARGS__)
 # define SENDFMT(fp, fmt, ...) \
@@ -274,6 +278,10 @@ struct globals {
 #if ENABLE_FEATURE_WGET_TIMEOUT
 	unsigned timeout_seconds;
 	smallint die_if_timed_out;
+# if ENABLE_PLATFORM_MINGW32
+	unsigned timeout_seconds_alarm;
+	unsigned alarm_thread_active;
+# endif
 #endif
 	smallint chunked;         /* chunked transfer encoding */
 	smallint got_clen;        /* got content-length: from server  */
@@ -402,20 +410,51 @@ static char *base64enc(const char *str)
 #endif
 
 #if ENABLE_FEATURE_WGET_TIMEOUT
+# if ENABLE_PLATFORM_MINGW32
+/* Thread function that waits and then triggers the timeout. */
+static DWORD WINAPI alarm_thread(LPVOID param)
+{
+	while(G.timeout_seconds_alarm > 0 && G.die_if_timed_out > 0) {
+		G.timeout_seconds_alarm = G.timeout_seconds_alarm - 1;
+		Sleep(1000);
+	}	
+	if(G.timeout_seconds_alarm == 0 && G.die_if_timed_out > 0) {
+		fprintf(stderr, "wget: download timed out in alarm\n");
+		_exit(1);
+	}
+	G.alarm_thread_active = 0;
+	return 0;
+}
+# else
 static void alarm_handler(int sig UNUSED_PARAM)
 {
 	/* This is theoretically unsafe (uses stdio and malloc in signal handler) */
 	if (G.die_if_timed_out)
-		bb_simple_error_msg_and_die("download timed out");
+		bb_simple_error_msg_and_die("download timed out in alarm");
 }
+# endif
+
+#  define clear_alarm() ((void)(G.die_if_timed_out = 0))
+
 static void set_alarm(void)
 {
 	if (G.timeout_seconds) {
-		alarm(G.timeout_seconds);
 		G.die_if_timed_out = 1;
+# if ENABLE_PLATFORM_MINGW32
+		G.timeout_seconds_alarm = G.timeout_seconds;
+		if(G.alarm_thread_active == 0) {
+			HANDLE thread;
+			thread = CreateThread(NULL, 0, alarm_thread, NULL, 0, NULL);
+			if (thread == NULL)
+				bb_error_msg_and_die("CreateThread failed: %lu", GetLastError());
+			CloseHandle(thread); /* detached */
+			G.alarm_thread_active = 1;
+		}	
+# else
+		alarm(G.timeout_seconds);
+# endif
 	}
 }
-# define clear_alarm() ((void)(G.die_if_timed_out = 0))
 #else
 # define set_alarm()   ((void)0)
 # define clear_alarm() ((void)0)
@@ -1053,7 +1092,7 @@ static void NOINLINE retrieve_file_data(FILE *dfp)
 # if ENABLE_FEATURE_WGET_TIMEOUT
 				if (second_cnt != 0 && --second_cnt == 0) {
 					progress_meter(PROGRESS_END);
-					bb_simple_error_msg_and_die("download timed out");
+					bb_simple_error_msg_and_die("download timed out in poll");
 				}
 # endif
 				/* We used to loop back to poll here,
@@ -1593,7 +1632,12 @@ IF_DESKTOP(	"no-parent\0"        No_argument       "\xf0")
 
 #if ENABLE_FEATURE_WGET_TIMEOUT
 	G.timeout_seconds = 900;
+# if ENABLE_PLATFORM_MINGW32
+	G.timeout_seconds_alarm = G.timeout_seconds;
+	G.alarm_thread_active = 0;
+# else
 	signal(SIGALRM, alarm_handler);
+# endif
 #endif
 	G.proxy_flag = "on";   /* use proxies if env vars are set */
 	G.user_agent = "Wget"; /* "User-Agent" header field */

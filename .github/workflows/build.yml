@@ -1,0 +1,86 @@
+name: Build BusyBox (Static Binaries)
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: linux-x64
+            arch: x64
+            cross_prefix: x86_64-buildroot-linux-uclibc-
+            toolchain_url: https://toolchains.bootlin.com/downloads/releases/toolchains/x86-64/tarballs/x86-64--uclibc--stable-2024.05-1.tar.xz
+            artifact_name: busybox-linux-x64
+          - target: linux-arm64
+            arch: arm64
+            cross_prefix: aarch64-buildroot-linux-uclibc-
+            toolchain_url: https://toolchains.bootlin.com/downloads/releases/toolchains/aarch64/tarballs/aarch64--uclibc--stable-2024.05-1.tar.xz
+            artifact_name: busybox-linux-arm64
+          - target: windows-x64
+            arch: x64
+            cross_prefix: x86_64-w64-mingw32-
+            artifact_name: busybox-windows-x64.exe
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v3
+
+      # Set up toolchain for Linux targets (download uClibc cross-compiler)
+      - name: Install uClibc cross-toolchain
+        if: contains(matrix.target, 'linux')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xz-utils
+          echo "Downloading uClibc toolchain for ${{ matrix.target }}..."
+          wget -q ${{ matrix.toolchain_url }} -O toolchain.tar.xz
+          tar -Jxf toolchain.tar.xz
+          TOOLCHAIN_DIR=$(basename "${{ matrix.toolchain_url }}" .tar.xz)
+          echo "Extracted toolchain to $TOOLCHAIN_DIR"
+          echo "$PWD/$TOOLCHAIN_DIR/bin" >> $GITHUB_PATH
+
+      # Set up toolchain for Windows target (install MinGW)
+      - name: Install MinGW for Windows build
+        if: matrix.target == 'windows-x64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64
+          echo "MinGW (cross-compiler) installed for Windows build"
+
+      - name: Configure BusyBox (defconfig + static)
+        env:
+          CROSS_COMPILE: ${{ matrix.cross_prefix }}
+        run: |
+          if [[ "${{ matrix.target }}" == "windows-x64" ]]; then
+            make mingw64_defconfig
+          else
+            make defconfig
+            sed -i 's/^# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
+          fi
+
+      - name: Patch BusyBox config for Wget
+        run: bash scripts/patch_config.sh
+
+      - name: Build BusyBox
+        env:
+          CROSS_COMPILE: ${{ matrix.cross_prefix }}
+        run: make -j$(nproc)
+      
+      - name: Rename output binary
+        run: |
+          if [[ "${{ matrix.target }}" == "windows-x64" ]]; then
+            mv busybox.exe ${{ matrix.artifact_name }}
+          else
+            mv busybox ${{ matrix.artifact_name }}
+          fi
+
+      - name: Upload BusyBox artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}
