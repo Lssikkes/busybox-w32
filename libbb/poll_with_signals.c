@@ -42,7 +42,30 @@ int FAST_FUNC check_got_signal_and_poll(struct pollfd pfd[1], int timeout)
 		errno = EINTR; /* inform the caller that we got a signal */
 		return -1;
 	}
+#if defined(__APPLE__)
+	/* macOS lacks ppoll; pselect provides identical atomic
+	 * signal-mask-swap semantics. Convert pollfd -> fd_sets, call
+	 * pselect, then translate the result back to revents. */
+	{
+		fd_set rfds, wfds, efds;
+		FD_ZERO(&rfds);
+		FD_ZERO(&wfds);
+		FD_ZERO(&efds);
+		if (pfd[0].events & POLLIN)  FD_SET(pfd[0].fd, &rfds);
+		if (pfd[0].events & POLLOUT) FD_SET(pfd[0].fd, &wfds);
+		FD_SET(pfd[0].fd, &efds);
+		n = pselect(pfd[0].fd + 1, &rfds, &wfds, &efds,
+		            timeout >= 0 ? &tv : NULL, &orig_mask);
+		if (n > 0) {
+			pfd[0].revents = 0;
+			if (FD_ISSET(pfd[0].fd, &rfds)) pfd[0].revents |= POLLIN;
+			if (FD_ISSET(pfd[0].fd, &wfds)) pfd[0].revents |= POLLOUT;
+			if (FD_ISSET(pfd[0].fd, &efds)) pfd[0].revents |= POLLERR;
+		}
+	}
+#else
 	n = ppoll(pfd, 1, timeout >= 0 ? &tv : NULL, &orig_mask);
+#endif
 	sigprocmask2(SIG_SETMASK, &orig_mask);
 	return n;
 }

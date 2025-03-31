@@ -9,6 +9,7 @@
  */
 #include "libbb.h"
 #include "inet_common.h"
+#include <arpa/inet.h>
 
 #if 0
 # define dbg(...) bb_error_msg(__VA_ARGS__)

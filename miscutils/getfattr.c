@@ -19,6 +19,26 @@
 #include <sys/xattr.h>
 #include "libbb.h"
 
+/* macOS has different xattr API - provide wrappers */
+#ifdef __APPLE__
+static ssize_t bb_getxattr(const char *path, const char *name, void *value, size_t size) {
+	return getxattr(path, name, value, size, 0, 0);
+}
+static ssize_t bb_lgetxattr(const char *path, const char *name, void *value, size_t size) {
+	return getxattr(path, name, value, size, 0, XATTR_NOFOLLOW);
+}
+static ssize_t bb_listxattr(const char *path, char *list, size_t size) {
+	return listxattr(path, list, size, 0);
+}
+static ssize_t bb_llistxattr(const char *path, char *list, size_t size) {
+	return listxattr(path, list, size, XATTR_NOFOLLOW);
+}
+# define getxattr bb_getxattr
+# define lgetxattr bb_lgetxattr
+# define listxattr bb_listxattr
+# define llistxattr bb_llistxattr
+#endif
+
 //usage:#define getfattr_trivial_usage
 //usage:       "[-h] {-d|-n ATTR} FILE...\n"
 //usage:#define getfattr_full_usage "\n\n"

@@ -804,8 +804,12 @@ busybox$(EXEEXT): busybox_unstripped$(EXEEXT)
 ifeq ($(SKIP_STRIP),y)
 	$(Q)cp $< $@
 else
+ifeq ($(shell uname -s),Darwin)
+	$(Q)$(STRIP) -S -x busybox_unstripped$(EXEEXT) -o $@
+else
 	$(Q)$(STRIP) -s --remove-section=.note --remove-section=.comment \
 		busybox_unstripped$(EXEEXT) -o $@
+endif
 # strip is confused by PIE executable and does not set exec bits
 	$(Q)chmod a+x $@
 endif

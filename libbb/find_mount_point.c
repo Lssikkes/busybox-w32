@@ -10,7 +10,9 @@
 # define MNTENT_PRIVATE
 #endif
 #include "libbb.h"
-#include <mntent.h>
+#if !defined(__APPLE__)
+# include <mntent.h>
+#endif
 
 /*
  * Given a block device, find the mount table entry if that block device
@@ -22,22 +24,20 @@
 struct mntent* FAST_FUNC find_mount_point(const char *name, int subdir_too)
 {
 	struct stat s;
-#if !ENABLE_PLATFORM_MINGW32
-	FILE *mtab_fp;
-	struct mntent *mountEntry;
-	dev_t devno_of_name;
-	bool block_dev;
-#else
-	struct mntent *mountEntry;
-	static struct mntdata *data = NULL;
-	char *current;
-	const char *path;
-#endif
+	struct mntent *mountEntry = NULL;
 
 	if (stat(name, &s) != 0)
 		return NULL;
 
-#if !ENABLE_PLATFORM_MINGW32
+#if defined(__APPLE__)
+	/* macOS doesn't have mntent.h - would need getmntinfo() */
+	/* For now, return NULL as this is rarely used */
+	(void)subdir_too;
+	return NULL;
+#elif !ENABLE_PLATFORM_MINGW32
+	FILE *mtab_fp;
+	dev_t devno_of_name;
+	bool block_dev;
 	devno_of_name = s.st_dev;
 	block_dev = 0;
 	/* Why S_ISCHR? - UBI volumes use char devices, not block */
@@ -86,6 +86,10 @@ struct mntent* FAST_FUNC find_mount_point(const char *name, int subdir_too)
 	}
 	endmntent(mtab_fp);
 #else
+	static struct mntdata *data = NULL;
+	const char *path;
+	char *current;
+
 	mountEntry = NULL;
 	path = NULL;
 	current = NULL;

@@ -51,7 +51,10 @@ CFLAGS += $(call cc-ifversion, -ge, 0400, -Wold-style-definition)
 
 ifneq ($(lastword $(subst -, ,$(CC))),clang)
 # "clang-9: warning: optimization flag '-finline-limit=0' is not supported
+# Also exclude macOS/Darwin which uses clang by default
+ifneq ($(shell uname -s),Darwin)
 CFLAGS += $(call cc-option,-finline-limit=0,)
+endif
 endif
 
 ifneq ($(CONFIG_STATICS_IN_BSS),y)
@@ -67,13 +70,18 @@ CFLAGS += $(call cc-option,-funsigned-char,)
 ifeq ($(CONFIG_STATIC_LIBGCC),y)
 # Disable it, for example, if you get
 # "clang-9: warning: argument unused during compilation: '-static-libgcc'"
+ifneq ($(lastword $(subst -, ,$(CC))),clang)
 CFLAGS += $(call cc-option,-static-libgcc,)
+endif
 endif
 
 CFLAGS += $(call cc-option,-falign-functions=1,)
 ifneq ($(lastword $(subst -, ,$(CC))),clang)
 # "clang-9: warning: optimization flag '-falign-jumps=1' is not supported" (and same for other two)
+# Also exclude macOS/Darwin which uses clang by default
+ifneq ($(shell uname -s),Darwin)
 CFLAGS += $(call cc-option,-falign-jumps=1 -falign-labels=1 -falign-loops=1,)
+endif
 endif
 
 # Defeat .eh_frame bloat (gcc 4.6.3 x86-32 defconfig: 20% smaller busybox binary):

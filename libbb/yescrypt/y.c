@@ -9,6 +9,11 @@
 
 #include "libbb.h"
 
+#if defined(__APPLE__)
+/* explicit_bzero is not declared under strict C standard modes on macOS */
+# define explicit_bzero(p, n) memset((p), 0, (n))
+#endif
+
 #define YESCRYPT_INTERNAL
 #include "alg-yescrypt.h"
 #include "alg-sha256.c"

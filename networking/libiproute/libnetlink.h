@@ -2,11 +2,23 @@
 #ifndef LIBNETLINK_H
 #define LIBNETLINK_H 1
 
-#include <linux/types.h>
+#ifdef __linux__
+# include <linux/types.h>
 /* We need linux/types.h because older kernels use __u32 etc
  * in linux/[rt]netlink.h. 2.6.19 seems to be ok, though */
-#include <linux/netlink.h>
-#include <linux/rtnetlink.h>
+# include <linux/netlink.h>
+# include <linux/rtnetlink.h>
+#else
+/* Stub for non-Linux platforms */
+# include <sys/types.h>
+# include <sys/socket.h>
+/* Define minimal types needed */
+typedef uint8_t __u8;
+typedef uint16_t __u16;
+typedef uint32_t __u32;
+typedef int32_t __s32;
+struct sockaddr_nl { int nl_family; };
+#endif
 
 PUSH_AND_SET_FUNCTION_VISIBILITY_TO_HIDDEN
 

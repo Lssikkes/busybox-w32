@@ -101,8 +101,25 @@ fi
 
 START_GROUP="-Wl,--start-group"
 END_GROUP="-Wl,--end-group"
+if ! check_cc "-Wl,--start-group -Wl,--end-group"; then
+    echo "Your linker does not support --start-group/--end-group"
+    START_GROUP=""
+    END_GROUP=""
+fi
+
+MAP_OPTS=""
+if check_cc "-Wl,-Map,mapfile.tmp"; then
+    MAP_OPTS="-Wl,-Map,$EXE.map"
+    rm -f mapfile.tmp
+fi
+
+VERBOSE_OPTS=""
+if check_cc "-Wl,--verbose"; then
+    VERBOSE_OPTS="-Wl,--verbose"
+fi
+
 INFO_OPTS() {
-	echo "$WARN_COMMON -Wl,-Map,$EXE.map -Wl,--verbose"
+	echo "$WARN_COMMON $MAP_OPTS $VERBOSE_OPTS"
 }
 
 # gold may not support --sort-common (yet)

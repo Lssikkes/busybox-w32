@@ -136,6 +136,55 @@
 #endif
 #include "reboot.h" /* reboot() constants */
 
+/* macOS doesn't have sigtimedwait, provide a fallback */
+#ifdef __APPLE__
+static int sigtimedwait(const sigset_t *set, siginfo_t *info, const struct timespec *timeout)
+{
+	int sig;
+	if (timeout && (timeout->tv_sec == 0 && timeout->tv_nsec == 0)) {
+		/* Non-blocking poll */
+		sigset_t pending;
+		sigpending(&pending);
+		for (sig = 1; sig < NSIG; sig++) {
+			if (sigismember(set, sig) && sigismember(&pending, sig)) {
+				/* Clear the signal and return it */
+				struct timespec zero_ts = {0, 0};
+				sigset_t one_sig;
+				sigemptyset(&one_sig);
+				sigaddset(&one_sig, sig);
+				sigtimedwait(&one_sig, NULL, &zero_ts); /* This recursive call won't happen as we're in the zero timeout case */
+				return sig;
+			}
+		}
+		return -1; /* No signal pending */
+	} else if (timeout == NULL) {
+		/* Blocking wait - use sigwait */
+		int result = sigwait(set, &sig);
+		return (result == 0) ? sig : -1;
+	} else {
+		/* Timed wait - use pselect */
+		sigset_t oldset;
+		sigprocmask(SIG_SETMASK, NULL, &oldset);
+		sigset_t newset = oldset;
+		for (sig = 1; sig < NSIG; sig++) {
+			if (sigismember(set, sig))
+				sigdelset(&newset, sig);
+		}
+		int result = pselect(0, NULL, NULL, NULL, timeout, &newset);
+		if (result < 0 && errno == EINTR) {
+			/* A signal was delivered - figure out which one */
+			sigset_t pending;
+			sigpending(&pending);
+			for (sig = 1; sig < NSIG; sig++) {
+				if (sigismember(set, sig) && sigismember(&pending, sig))
+					return sig;
+			}
+		}
+		return -1;
+	}
+}
+#endif
+
 #if DEBUG_SEGV_HANDLER
 # undef _GNU_SOURCE
 # define _GNU_SOURCE 1

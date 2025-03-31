@@ -24,7 +24,16 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <netdb.h>
+
+#if ENABLE_PLATFORM_MINGW32 && defined(_WIN64) && (!defined(_M_ARM64)) && (!defined(__aarch64__))
+typedef void *jmp_buf[6];
+#undef setjmp
+#define setjmp(x) (((__builtin_setjmp((x))!=0)?(int)x[5]:0))
+#undef longjmp
+#define longjmp(x,y) { x[5] = (void*)(y); __builtin_longjmp((x),1); }
+#else
 #include <setjmp.h>
+#endif
 #include <signal.h>
 #include <paths.h>
 #if defined __UCLIBC__ /* TODO: and glibc? */
