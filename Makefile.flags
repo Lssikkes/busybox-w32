@@ -63,7 +63,9 @@ CFLAGS += $(call cc-option,-funsigned-char,)
 ifeq ($(CONFIG_STATIC_LIBGCC),y)
 # Disable it, for example, if you get
 # "clang-9: warning: argument unused during compilation: '-static-libgcc'"
+ifneq ($(lastword $(subst -, ,$(CC))),clang)
 CFLAGS += $(call cc-option,-static-libgcc,)
+endif
 endif
 
 CFLAGS += $(call cc-option,-falign-functions=1,)
