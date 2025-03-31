@@ -171,8 +171,14 @@
 #include <limits.h>
 #if defined(__digital__) && defined(__unix__)
 # include <sex.h>
-#elif defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) \
-   || defined(__APPLE__)
+#elif defined(__APPLE__)
+# include <sys/resource.h>  /* rlimit */
+# include <machine/endian.h>
+# include <libkern/OSByteOrder.h>
+# define bswap_64 OSSwapInt64
+# define bswap_32 OSSwapInt32
+# define bswap_16 OSSwapInt16
+#elif defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 # include <sys/resource.h>  /* rlimit */
 # include <machine/endian.h>
 # define bswap_64 __bswap64
@@ -537,6 +543,12 @@ typedef unsigned smalluint;
 
 #if defined(__APPLE__)
 # undef HAVE_STRCHRNUL
+#endif
+
+#if defined(__APPLE__)
+/* macOS does not have mempcpy, memrchr */
+# undef HAVE_MEMPCPY
+# undef HAVE_MEMRCHR
 #endif
 
 #if defined(__FreeBSD__)

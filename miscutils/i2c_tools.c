@@ -65,7 +65,8 @@
 
 #include "libbb.h"
 
-#include <linux/i2c.h>
+#ifdef __linux__
+# include <linux/i2c.h>
 
 #define I2CDUMP_NUM_REGS		256
 
@@ -1541,3 +1542,36 @@ int i2ctransfer_main(int argc UNUSED_PARAM, char **argv)
 	return 0;
 }
 #endif /* ENABLE_I2CTRANSFER */
+#else /* !__linux__ */
+/* Stubs for non-Linux platforms */
+#if ENABLE_I2CGET
+int i2cget_main(int argc UNUSED_PARAM, char **argv UNUSED_PARAM) MAIN_EXTERNALLY_VISIBLE;
+int i2cget_main(int argc UNUSED_PARAM, char **argv UNUSED_PARAM) {
+	bb_simple_error_msg_and_die("i2c tools are not supported on this platform");
+}
+#endif
+#if ENABLE_I2CSET
+int i2cset_main(int argc UNUSED_PARAM, char **argv UNUSED_PARAM) MAIN_EXTERNALLY_VISIBLE;
+int i2cset_main(int argc UNUSED_PARAM, char **argv UNUSED_PARAM) {
+	bb_simple_error_msg_and_die("i2c tools are not supported on this platform");
+}
+#endif
+#if ENABLE_I2CDUMP
+int i2cdump_main(int argc UNUSED_PARAM, char **argv UNUSED_PARAM) MAIN_EXTERNALLY_VISIBLE;
+int i2cdump_main(int argc UNUSED_PARAM, char **argv UNUSED_PARAM) {
+	bb_simple_error_msg_and_die("i2c tools are not supported on this platform");
+}
+#endif
+#if ENABLE_I2CDETECT
+int i2cdetect_main(int argc UNUSED_PARAM, char **argv UNUSED_PARAM) MAIN_EXTERNALLY_VISIBLE;
+int i2cdetect_main(int argc UNUSED_PARAM, char **argv UNUSED_PARAM) {
+	bb_simple_error_msg_and_die("i2c tools are not supported on this platform");
+}
+#endif
+#if ENABLE_I2CTRANSFER
+int i2ctransfer_main(int argc UNUSED_PARAM, char **argv UNUSED_PARAM) MAIN_EXTERNALLY_VISIBLE;
+int i2ctransfer_main(int argc UNUSED_PARAM, char **argv UNUSED_PARAM) {
+	bb_simple_error_msg_and_die("i2c tools are not supported on this platform");
+}
+#endif
+#endif /* __linux__ */

@@ -46,6 +46,7 @@
 //usage:#define dnsdomainname_full_usage ""
 
 #include "libbb.h"
+#include <arpa/inet.h>
 
 static void do_sethostname(char *s, int isfile)
 {

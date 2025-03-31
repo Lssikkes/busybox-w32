@@ -3,14 +3,28 @@
 #define IP_COMMON_H 1
 
 #include "libbb.h"
-#include <asm/types.h>
-#include <linux/netlink.h>
-#include <linux/rtnetlink.h>
-#if !defined IFA_RTA
-#include <linux/if_addr.h>
+#ifdef __linux__
+# include <asm/types.h>
+# include <linux/netlink.h>
+# include <linux/rtnetlink.h>
+#else
+/* Stub headers for non-Linux platforms */
+# include <sys/types.h>
+# include <sys/socket.h>
+# include <net/if.h>
+/* Define minimal types needed */
+typedef uint8_t __u8;
+typedef uint16_t __u16;
+typedef uint32_t __u32;
+typedef int32_t __s32;
 #endif
-#if !defined IFLA_RTA
-#include <linux/if_link.h>
+#ifdef __linux__
+# if !defined IFA_RTA
+#  include <linux/if_addr.h>
+# endif
+# if !defined IFLA_RTA
+#  include <linux/if_link.h>
+# endif
 #endif
 
 PUSH_AND_SET_FUNCTION_VISIBILITY_TO_HIDDEN
