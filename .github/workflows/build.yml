@@ -30,7 +30,7 @@ jobs:
             arch: arm64
             cross_prefix: aarch64-w64-mingw32-
             # Note the URL below uses the UCRT toolchain built for Ubuntu 20.04.
-            toolchain_url: "https://github.com/mstorsjo/llvm-mingw/releases/download/20250402/llvm-mingw-20250402-ucrt-ubuntu-20.04-aarch64.tar.xz"
+            toolchain_url: "https://github.com/mstorsjo/llvm-mingw/releases/download/20250402/llvm-mingw-20250402-ucrt-ubuntu-20.04-x86_64.tar.xz"
             artifact_name: busybox-windows-arm64.exe
 
     steps:
