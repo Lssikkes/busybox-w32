@@ -116,44 +116,19 @@ jobs:
           release_name: "BusyBox Build v${{ github.run_number }}"
           draft: false
           prerelease: false
+          
+      # Zip the entire artifacts folder into a single file.
+      - name: Zip all artifacts
+        run: |
+          zip -r busybox.zip artifacts
 
-      # Upload each artifact as a release asset
-      - name: Upload BusyBox Linux x64 asset
+      # Upload the single ZIP file as a release asset.
+      - name: Upload All Artifacts as a Single Release Asset
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: artifacts/busybox-linux-x64
-          asset_name: busybox-linux-x64
-          asset_content_type: application/octet-stream
-
-      - name: Upload BusyBox Linux arm64 asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: artifacts/busybox-linux-arm64
-          asset_name: busybox-linux-arm64
-          asset_content_type: application/octet-stream
-
-      - name: Upload BusyBox Windows x64 asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: artifacts/busybox-windows-x64.exe
-          asset_name: busybox-windows-x64.exe
-          asset_content_type: application/octet-stream
-
-      - name: Upload BusyBox Windows arm64 asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: artifacts/busybox-windows-arm64.exe
-          asset_name: busybox-windows-arm64.exe
-          asset_content_type: application/octet-stream
+          asset_path: busybox.zip
+          asset_name: busybox.zip
+          asset_content_type: application/zip
