@@ -2,9 +2,9 @@ name: Build BusyBox (Static Binaries)
 
 on:
   push:
-    branches: [ master ]
+    branches: ["**"]   # This now runs on all branches.
   pull_request:
-    branches: [ master ]
+    branches: [master]  # PR trigger remains for PRs that target master.
 
 jobs:
   build:
@@ -30,7 +30,7 @@ jobs:
           - target: windows-arm64
             arch: arm64
             cross_prefix: aarch64-w64-mingw32-
-            # Note the URL below uses the UCRT toolchain built for Ubuntu 20.04.
+            # Note: Even for windows-arm64 we use the x86_64 build of the toolchain.
             toolchain_url: "https://github.com/mstorsjo/llvm-mingw/releases/download/20250402/llvm-mingw-20250402-ucrt-ubuntu-20.04-x86_64.tar.xz"
             artifact_name: busybox-windows-arm64.exe
 
@@ -38,7 +38,7 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v3
 
-      # Set up toolchain for Linux targets (uClibc cross-compiler)
+      # Install uClibc toolchain for Linux targets
       - name: Install uClibc cross-toolchain
         if: contains(matrix.target, 'linux')
         run: |
@@ -51,21 +51,13 @@ jobs:
           echo "Extracted toolchain to $TOOLCHAIN_DIR"
           echo "$PWD/$TOOLCHAIN_DIR/bin" >> $GITHUB_PATH
 
-      # Set up toolchain for Windows x64 target (install MinGW via apt)
-      #- name: Install MinGW for Windows build (x64)
-        #if: matrix.target == 'windows-x64'
-        #run: |
-          #sudo apt-get update
-          #sudo apt-get install -y mingw-w64
-          #echo "MinGW (cross-compiler) installed for Windows x64 build"
-
-      # Set up toolchain for Windows ARM64 target (download LLVM-MinGW UCRT toolchain)
+      # Install LLVM-MinGW toolchain for Windows targets
       - name: Install LLVM-MinGW for Windows build
-        if: matrix.target == 'windows-arm64' ||  matrix.target == 'windows-x64'
+        if: startsWith(matrix.target, 'windows')
         run: |
           sudo apt-get update
           sudo apt-get install -y xz-utils
-          echo "Downloading LLVM-MinGW toolchain for Windows on Linux (UCRT)..."
+          echo "Downloading LLVM-MinGW toolchain for Windows (UCRT)..."
           wget -q ${{ matrix.toolchain_url }} -O toolchain.tar.xz
           tar -Jxf toolchain.tar.xz
           TOOLCHAIN_DIR=$(basename "${{ matrix.toolchain_url }}" .tar.xz)
@@ -104,3 +96,64 @@ jobs:
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_name }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: "v${{ github.run_number }}"
+          release_name: "BusyBox Build v${{ github.run_number }}"
+          draft: false
+          prerelease: false
+
+      # Upload each artifact as a release asset
+      - name: Upload BusyBox Linux x64 asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: artifacts/busybox-linux-x64
+          asset_name: busybox-linux-x64
+          asset_content_type: application/octet-stream
+
+      - name: Upload BusyBox Linux arm64 asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: artifacts/busybox-linux-arm64
+          asset_name: busybox-linux-arm64
+          asset_content_type: application/octet-stream
+
+      - name: Upload BusyBox Windows x64 asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: artifacts/busybox-windows-x64.exe
+          asset_name: busybox-windows-x64.exe
+          asset_content_type: application/octet-stream
+
+      - name: Upload BusyBox Windows arm64 asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: artifacts/busybox-windows-arm64.exe
+          asset_name: busybox-windows-arm64.exe
+          asset_content_type: application/octet-stream
