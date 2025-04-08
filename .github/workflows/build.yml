@@ -26,12 +26,18 @@ jobs:
             arch: x64
             cross_prefix: x86_64-w64-mingw32-
             artifact_name: busybox-windows-x64.exe
+          - target: windows-arm64
+            arch: arm64
+            cross_prefix: aarch64-w64-mingw32-
+            # Note the URL below uses the UCRT toolchain built for Ubuntu 20.04.
+            toolchain_url: "https://github.com/mstorsjo/llvm-mingw/releases/download/20250402/llvm-mingw-20250402-ucrt-ubuntu-20.04-aarch64.tar.xz"
+            artifact_name: busybox-windows-arm64.exe
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v3
 
-      # Set up toolchain for Linux targets (download uClibc cross-compiler)
+      # Set up toolchain for Linux targets (uClibc cross-compiler)
       - name: Install uClibc cross-toolchain
         if: contains(matrix.target, 'linux')
         run: |
@@ -44,19 +50,32 @@ jobs:
           echo "Extracted toolchain to $TOOLCHAIN_DIR"
           echo "$PWD/$TOOLCHAIN_DIR/bin" >> $GITHUB_PATH
 
-      # Set up toolchain for Windows target (install MinGW)
-      - name: Install MinGW for Windows build
+      # Set up toolchain for Windows x64 target (install MinGW via apt)
+      - name: Install MinGW for Windows build (x64)
         if: matrix.target == 'windows-x64'
         run: |
           sudo apt-get update
           sudo apt-get install -y mingw-w64
-          echo "MinGW (cross-compiler) installed for Windows build"
+          echo "MinGW (cross-compiler) installed for Windows x64 build"
+
+      # Set up toolchain for Windows ARM64 target (download LLVM-MinGW UCRT toolchain)
+      - name: Install LLVM-MinGW for Windows ARM64 build
+        if: matrix.target == 'windows-arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xz-utils
+          echo "Downloading LLVM-MinGW toolchain for Windows ARM64 (UCRT)..."
+          wget -q ${{ matrix.toolchain_url }} -O toolchain.tar.xz
+          tar -Jxf toolchain.tar.xz
+          TOOLCHAIN_DIR=$(basename "${{ matrix.toolchain_url }}" .tar.xz)
+          echo "Extracted toolchain to $TOOLCHAIN_DIR"
+          echo "$PWD/$TOOLCHAIN_DIR/bin" >> $GITHUB_PATH
 
       - name: Configure BusyBox (defconfig + static)
         env:
           CROSS_COMPILE: ${{ matrix.cross_prefix }}
         run: |
-          if [[ "${{ matrix.target }}" == "windows-x64" ]]; then
+          if [[ "${{ matrix.target }}" == *"windows"* ]]; then
             make mingw64_defconfig
           else
             make defconfig
@@ -73,7 +92,7 @@ jobs:
       
       - name: Rename output binary
         run: |
-          if [[ "${{ matrix.target }}" == "windows-x64" ]]; then
+          if [[ "${{ matrix.target }}" == *"windows"* ]]; then
             mv busybox.exe ${{ matrix.artifact_name }}
           else
             mv busybox ${{ matrix.artifact_name }}
