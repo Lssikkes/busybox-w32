@@ -10,6 +10,7 @@ if is_sourced; then
  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
  export PATH="$PATH:$SCRIPT_DIR/../toolchain/bin"
  [ "$CROSS_COMPILE" == "" ] && export CROSS_COMPILE=x86_64-w64-mingw32-
+ [ "$CROSS_COMPILER" == "" ] && export CROSS_COMPILER=clang
 else
  sudo apt-get install -y xz-utils
 
