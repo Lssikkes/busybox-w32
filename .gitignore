@@ -35,6 +35,7 @@ Config.in
 # debugging stuff
 #
 core
+toolchain
 .gdb_history
 .gdbinit
 

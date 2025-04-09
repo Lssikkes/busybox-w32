@@ -225,12 +225,12 @@
  * When debugging is on ("set -o debug" was executed, or DEBUG=2),
  * debugging info is written to ./trace, quit signal generates core dump.
  */
-#define DEBUG 0
+#define DEBUG 2
 /* Tweak debug output verbosity here */
 #define DEBUG_TIME 0
 #define DEBUG_PID 1
 #define DEBUG_SIG 1
-#define DEBUG_INTONOFF 0
+#define DEBUG_INTONOFF 1
 
 #define PROFILE 0
 
@@ -887,7 +887,9 @@ raise_exception(int e)
 #endif
 	INT_OFF;
 	exception_type = e;
+	TRACE(("raise_exception longjmp\n"));
 	longjmp(exception_handler->loc, 1);
+	TRACE(("raise_exception longjmp ret? shouldn't get here..\n"));
 }
 #if DEBUG
 #define raise_exception(e) do { \
@@ -999,9 +1001,13 @@ outstr(const char *p, FILE *file)
 static void
 flush_stdout_stderr(void)
 {
+	TRACE(("flush_stdout_stderr int_off\n"));
 	INT_OFF;
+	TRACE(("flush_stdout_stderr fflush_all\n"));
 	fflush_all();
+	TRACE(("flush_stdout_stderr int_on\n"));
 	INT_ON;
+	TRACE(("flush_stdout_stderr done\n"));
 }
 
 /* Was called outcslow(c,FILE*), but c was always '\n' */
@@ -1306,9 +1312,11 @@ trace_printf(const char *fmt, ...)
 		fprintf(tracefile, "[%u] ", (int) getpid());
 	if (DEBUG_SIG)
 		fprintf(tracefile, "pending s:%d i:%d(supp:%d) ", pending_sig, pending_int, suppress_int);
+	
 	va_start(va, fmt);
 	vfprintf(tracefile, fmt, va);
 	va_end(va);
+	fflush(tracefile);
 }
 
 static void
@@ -1318,6 +1326,7 @@ trace_vprintf(const char *fmt, va_list va)
 		return;
 	vfprintf(tracefile, fmt, va);
 	fprintf(tracefile, "\n");
+	fflush(tracefile);
 }
 
 static void
@@ -1326,6 +1335,7 @@ trace_puts(const char *s)
 	if (debug != 1)
 		return;
 	fputs(s, tracefile);
+	fflush(tracefile);
 }
 
 static void
@@ -1368,6 +1378,7 @@ trace_puts_quoted(char *s)
 		}
 	}
 	putc('"', tracefile);
+	fflush(tracefile);
 }
 
 static void
@@ -1385,6 +1396,7 @@ trace_puts_args(char **ap)
 		}
 		putc(' ', tracefile);
 	}
+	fflush(tracefile);
 }
 
 static void
@@ -10447,7 +10459,7 @@ evaltree(union node *n, int flags)
 	int (*evalfn)(union node *, int);
 	struct stackmark smark;
 	int status = 0;
-
+	fprintf(stderr, "ASH_EVALTREE_INNER\n");
 	setstackmark(&smark);
 
 	if (nflag)
@@ -11672,10 +11684,13 @@ evalcommand(union node *cmd, int flags)
 			preverrout_fd = atoi(xtracefd);
 
 	}
+	TRACE(("evalcommand redirectsafe\n"));
 	status = redirectsafe(cmd->ncmd.redirect, REDIR_PUSH | REDIR_SAVEFD2);
+	TRACE(("evalcommand redirectsafe done\n"));
 
 	if (status) {
  bail:
+ 		TRACE(("evalcommand bail %d\n", status));
 		exitstatus = status;
 
 		/* We have a redirection error. */
@@ -11685,6 +11700,7 @@ evalcommand(union node *cmd, int flags)
 		goto out;
 	}
 
+	TRACE(("evalcommand expandargs\n"));
 	for (argp = cmd->ncmd.assign; argp; argp = argp->narg.next) {
 		struct strlist **spp;
 
@@ -11735,6 +11751,7 @@ evalcommand(union node *cmd, int flags)
 		safe_write(preverrout_fd, "\n", 1);
 	}
 
+	TRACE(("evalcommand locate cmd\n"));
 	/* Now locate the command. */
 	if (cmdentry.cmdtype != CMDBUILTIN
 	 || !(IS_BUILTIN_REGULAR(cmdentry.u.cmd))
@@ -11745,9 +11762,11 @@ evalcommand(union node *cmd, int flags)
 
 	jp = NULL;
 
+	TRACE(("evalcommand exec cmd\n"));
 	/* Execute the command. */
 	switch (cmdentry.cmdtype) {
 	case CMDUNKNOWN:
+		TRACE(("evalcommand CMDUNKNOWN\n"));
 		status = 127;
 		flush_stdout_stderr();
 		goto bail;
@@ -11765,6 +11784,7 @@ evalcommand(union node *cmd, int flags)
  *     (perhaps it should, so that "VAR=VAL nofork" at least avoids exec...)
  */
 		/* find_command() encodes applet_no as (-2 - applet_no) */
+		TRACE(("evalcommand CMD SH_STANDALONE_NOFORK_APPLET_MINGW32\n"));
 		int applet_no = (- cmdentry.u.index - 2);
 		if (applet_no >= 0 && APPLET_IS_NOFORK(applet_no)) {
 			char **sv_environ;
@@ -11811,8 +11831,10 @@ evalcommand(union node *cmd, int flags)
 		 * we can just exec it.
 		 */
 #if ENABLE_PLATFORM_MINGW32
+		
 		if (!(flags & EV_EXIT) || may_have_traps IF_SUW32(|| delayexit)) {
 			/* No, forking off a child is necessary */
+			TRACE(("evalcommand FORK NECESSARY\n"));
 			struct forkshell fs;
 
 			INT_OFF;
@@ -11827,6 +11849,8 @@ evalcommand(union node *cmd, int flags)
 		}
 #else
 		if (!(flags & EV_EXIT) || may_have_traps) {
+			TRACE(("evalcommand FORK NECESSARY\n"));
+
 			/* No, forking off a child is necessary */
 			INT_OFF;
 			get_tty_state();
@@ -11840,25 +11864,35 @@ evalcommand(union node *cmd, int flags)
 			/* fall through to exec'ing external program */
 		}
 #endif
+
+		TRACE(("evalcommand shellexec\n"));
 		shellexec(argv[0], argv, path, cmdentry.u.index, FALSE);
+		TRACE(("evalcommand shellexec done\n"));
 		/* NOTREACHED */
 	} /* default */
 	case CMDBUILTIN:
+		TRACE(("evalcommand CMDBUILTIN\n"));
 		if (evalbltin(cmdentry.u.cmd, argc, argv, flags)
 		 && !(exception_type == EXERROR && spclbltin <= 0)
 		) {
  raise:
+ 			TRACE(("evalcommand CMDBUILTIN exception\n"));
 			longjmp(exception_handler->loc, 1);
 		}
 		break;
 
 	case CMDFUNCTION:
-		if (evalfun(cmdentry.u.func, argc, argv, flags))
+		TRACE(("evalcommand CMDFUNCTION\n"));
+		if (evalfun(cmdentry.u.func, argc, argv, flags)) {
+			TRACE(("evalcommand CMDFUNCTION exception\n"));
 			goto raise;
+		}
 		break;
 	} /* switch */
 
+	TRACE(("evalcommand waitforjob\n"));
 	status = waitforjob(jp);
+	TRACE(("evalcommand waitforjob done\n"));
 	if (jp)
 		TRACE(("forked child exited with %d\n", status));
 	FORCE_INT_ON;
@@ -11883,6 +11917,7 @@ evalcommand(union node *cmd, int flags)
 static int
 evalbltin(const struct builtincmd *cmd, int argc, char **argv, int flags)
 {
+	TRACE(("evalbltin\n"));
 	char *volatile savecmdname;
 	struct jmploc *volatile savehandler;
 	struct jmploc jmploc;
@@ -11898,17 +11933,31 @@ evalbltin(const struct builtincmd *cmd, int argc, char **argv, int flags)
 	commandname = argv[0];
 	argptr = argv + 1;
 	optptr = NULL;                  /* initialize nextopt */
-	if (cmd == EVALCMD)
+
+	
+	if (cmd == EVALCMD) {
+		TRACE(("evalbltin evalcmd\n"));
 		status = evalcmd(argc, argv, flags);
-	else
+		TRACE(("evalbltin evalcmd done\n"));
+	}
+	else {
+		TRACE(("evalbltin cmd != EVALCMD\n"));
 		status = (*cmd->builtin)(argc, argv);
+		TRACE(("evalbltin cmd != EVALCMD done\n"));
+	}
+
+	TRACE(("evalbltin flush_stdout_stderr\n"));
 	flush_stdout_stderr();
+	TRACE(("evalbltin status\n"));
 	status |= ferror(stdout);
 	exitstatus = status;
  cmddone:
+ 	TRACE(("evalbltin clearerr\n"));
 	clearerr(stdout);
 	commandname = savecmdname;
 	exception_handler = savehandler;
+
+	TRACE(("evalbltin return %d\n", i));
 
 	return i;
 }
@@ -14871,18 +14920,22 @@ evalstring(char *s, int flags)
 	if (ex)
 		goto out;
 	exception_handler = &jmploc;
-
+	fprintf(stderr, "ASH_EVALSTRING_INNER_START\n");
 	while ((n = parsecmd(0)) != NODE_EOF) {
 		int i;
 
+		fprintf(stderr, "ASH_EVALSTRING_INNER_EVALTREE\n");
 		i = evaltree(n, flags & ~(parser_eof() ? 0 : EV_EXIT));
+		fprintf(stderr, "ASH_EVALSTRING_INNER_EVALTREE_END\n");
 		if (n)
 			status = i;
 		popstackmark(&smark);
 		if (evalskip)
 			break;
 	}
+	fprintf(stderr, "ASH_EVALSTRING_INNER_END\n");
  out:
+ 	fprintf(stderr, "ASH_EVALSTRING_INNER_OUT\n");
 	popstackmark(&smark);
 	popfile();
 	stunalloc(s);
@@ -16318,6 +16371,7 @@ int ash_main(int argc UNUSED_PARAM, char **argv)
 
 	state = 0;
 	if (setjmp(jmploc.loc)) {
+		TRACE(("exception handler %d\n", (int)(smallint)exception_type));
 		smallint e;
 		smallint s;
 
@@ -16336,6 +16390,7 @@ int ash_main(int argc UNUSED_PARAM, char **argv)
 		}
 
 		popstackmark(&smark);
+
 		FORCE_INT_ON; /* enable interrupts */
 		if (s == 1)
 			goto state1;
@@ -16348,8 +16403,11 @@ int ash_main(int argc UNUSED_PARAM, char **argv)
 	exception_handler = &jmploc;
 	rootpid = getpid();
 
+	fprintf(stderr, "ASH_INIT\n");
 	init();
 	setstackmark(&smark);
+
+	
 
 #if ENABLE_PLATFORM_MINGW32
 	SetConsoleCtrlHandler(ctrl_handler, TRUE);
@@ -16360,7 +16418,9 @@ int ash_main(int argc UNUSED_PARAM, char **argv)
 		/* Non-NULL minusc tells procargs that an embedded script is being run */
 		minusc = get_script_content(-argc - 1);
 #endif
+	fprintf(stderr, "ASH_PROCARGS\n");
 	login_sh = procargs(argv);
+	fprintf(stderr, "ASH_PROCARGS_END\n");
 #if DEBUG
 	TRACE(("Shell args: "));
 	trace_puts_args(argv);
@@ -16449,11 +16509,13 @@ int ash_main(int argc UNUSED_PARAM, char **argv)
 		//  ash -sc 'echo $-'
 		// continue reading input from stdin after running 'echo'.
 		// bash does not do this: it prints "hBcs" and exits.
+		fprintf(stderr, "ASH_EVALSTRING\n");
 #if !ENABLE_PLATFORM_MINGW32
 		evalstring(minusc, EV_EXIT);
 #else
 		evalstring(minusc, sflag ? 0 : EV_EXIT);
 #endif
+		fprintf(stderr, "ASH_EVALSTRING_DONE\n");
 	}
 
 	if (sflag || minusc == NULL) {
