@@ -29,20 +29,20 @@ jobs:
             cross_prefix: x86_64-w64-mingw32-
             cross_compiler: clang
             toolchain_url: "https://github.com/mstorsjo/llvm-mingw/releases/download/20250402/llvm-mingw-20250402-ucrt-ubuntu-20.04-x86_64.tar.xz"
-            artifact_name: busybox-windows-x64.exe
+            artifact_name: busybox-windows-x64-ucrt.exe
           - target: windows-x64-msvcrt
             arch: x64
             cross_prefix: x86_64-w64-mingw32-
             cross_compiler: clang
             toolchain_url: "https://github.com/mstorsjo/llvm-mingw/releases/download/20250402/llvm-mingw-20250402-msvcrt-ubuntu-20.04-x86_64.tar.xz"
-            artifact_name: busybox-windows-x64.exe
+            artifact_name: busybox-windows-x64-msvcrt.exe
           - target: windows-arm64-ucrt
             arch: arm64
             cross_prefix: aarch64-w64-mingw32-
             cross_compiler: clang
             # Note: Even for windows-arm64 we use the x86_64 build of the toolchain.
             toolchain_url: "https://github.com/mstorsjo/llvm-mingw/releases/download/20250402/llvm-mingw-20250402-ucrt-ubuntu-20.04-x86_64.tar.xz"
-            artifact_name: busybox-windows-arm64.exe
+            artifact_name: busybox-windows-arm64-ucrt.exe
 
     steps:
       - name: Checkout source
