@@ -24,13 +24,19 @@ jobs:
             cross_compiler: gcc
             toolchain_url: https://toolchains.bootlin.com/downloads/releases/toolchains/aarch64/tarballs/aarch64--uclibc--stable-2024.05-1.tar.xz
             artifact_name: busybox-linux-arm64
-          - target: windows-x64
+          - target: windows-x64-ucrt
             arch: x64
             cross_prefix: x86_64-w64-mingw32-
             cross_compiler: clang
             toolchain_url: "https://github.com/mstorsjo/llvm-mingw/releases/download/20250402/llvm-mingw-20250402-ucrt-ubuntu-20.04-x86_64.tar.xz"
             artifact_name: busybox-windows-x64.exe
-          - target: windows-arm64
+          - target: windows-x64-msvcrt
+            arch: x64
+            cross_prefix: x86_64-w64-mingw32-
+            cross_compiler: clang
+            toolchain_url: "https://github.com/mstorsjo/llvm-mingw/releases/download/20250402/llvm-mingw-20250402-msvcrt-ubuntu-20.04-x86_64.tar.xz"
+            artifact_name: busybox-windows-x64.exe
+          - target: windows-arm64-ucrt
             arch: arm64
             cross_prefix: aarch64-w64-mingw32-
             cross_compiler: clang
@@ -61,7 +67,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y xz-utils
-          echo "Downloading LLVM-MinGW toolchain for Windows (UCRT)..."
+          echo "Downloading LLVM-MinGW toolchain for Windows..."
           wget -q ${{ matrix.toolchain_url }} -O toolchain.tar.xz
           tar -Jxf toolchain.tar.xz
           TOOLCHAIN_DIR=$(basename "${{ matrix.toolchain_url }}" .tar.xz)
