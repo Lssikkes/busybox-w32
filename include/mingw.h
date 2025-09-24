@@ -259,6 +259,7 @@ int ffs(int i);
  */
 
 #define TIOCGWINSZ 0x5413
+#define TIOCSWINSZ 0x5414
 
 int ioctl(int fd, int code, ...);
 
@@ -670,3 +671,4 @@ enum {
 int elevation_state(void);
 void set_interp(int i) FAST_FUNC;
 int mingw_shell_execute(SHELLEXECUTEINFO *info);
+void mingw_die_if_error(NTSTATUS status, const char *function_name);

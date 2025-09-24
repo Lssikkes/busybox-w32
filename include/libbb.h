@@ -290,6 +290,26 @@ PUSH_AND_SET_FUNCTION_VISIBILITY_TO_HIDDEN
 # endif
 #endif
 
+#if ENABLE_FEATURE_TLS_SCHANNEL || ENABLE_FEATURE_USE_CNG_API
+# define SECURITY_WIN32
+# include <windows.h>
+# include <security.h>
+#endif
+
+#if ENABLE_FEATURE_USE_CNG_API
+# include <bcrypt.h>
+
+// these work on Windows >= 10
+# define BCRYPT_HMAC_SHA1_ALG_HANDLE   ((BCRYPT_ALG_HANDLE) 0x000000a1)
+# define BCRYPT_HMAC_SHA256_ALG_HANDLE ((BCRYPT_ALG_HANDLE) 0x000000b1)
+# define sha1_begin_hmac BCRYPT_HMAC_SHA1_ALG_HANDLE
+# define sha256_begin_hmac BCRYPT_HMAC_SHA256_ALG_HANDLE
+#else
+# define sha1_begin_hmac sha1_begin
+# define sha256_begin_hmac sha256_begin
+# define hmac_uninit(...) ((void)0)
+#endif
+
 /* Tested to work correctly with all int types (IIRC :]) */
 #define MAXINT(T) (T)( \
 	((T)-1) > 0 \
@@ -708,6 +728,8 @@ int sigaction_set(int sig, const struct sigaction *act) FAST_FUNC;
 int sigprocmask_allsigs(int how) FAST_FUNC;
 /* Return old set in the same set: */
 int sigprocmask2(int how, sigset_t *set) FAST_FUNC;
+/* SIG_BLOCK all signals, return old set: */
+int sigblockall(sigset_t *set) FAST_FUNC;
 #else
 #define bb_signals(s, f)
 #define kill_myself_with_sig(s)
@@ -908,7 +930,36 @@ struct hostent *xgethostbyname(const char *name) FAST_FUNC;
 // Also mount.c and inetd.c are using gethostbyname(),
 // + inet_common.c has additional IPv4-only stuff
 
+#if defined CONFIG_FEATURE_TLS_SCHANNEL
+enum schannel_connection_state {
+	BB_SCHANNEL_OPEN = 0,
+	BB_SCHANNEL_CLOSED = 1,
+	BB_SCHANNEL_CLOSED_AND_FREED = 2
+};
 
+typedef struct tls_state {
+	int ofd;
+	int ifd;
+
+	// handles
+	CredHandle cred_handle;
+	CtxtHandle ctx_handle;
+
+	// buffers
+	char in_buffer[16384 + 256]; // input buffer (to read from server), length is maximum TLS packet size
+	unsigned long in_buffer_offset;
+
+	char *out_buffer; // output buffer (for decrypted data, offset from in_buffer)
+	unsigned long out_buffer_length;
+	unsigned long out_buffer_extra;
+
+	// data
+	char *hostname;
+	SecPkgContext_StreamSizes stream_sizes;
+	bool initialized;
+	enum schannel_connection_state connection_state;
+} tls_state_t;
+#else
 struct tls_aes {
 	uint32_t key[60];
 	unsigned rounds;
@@ -965,12 +1016,14 @@ typedef struct tls_state {
 	struct tls_aes aes_decrypt;
 	uint8_t H[16]; //used by AES_GCM
 } tls_state_t;
+#endif
 
 static inline tls_state_t *new_tls_state(void)
 {
 	tls_state_t *tls = xzalloc(sizeof(*tls));
 	return tls;
 }
+
 void tls_handshake(tls_state_t *tls, const char *sni) FAST_FUNC;
 #define TLSLOOP_EXIT_ON_LOCAL_EOF (1 << 0)
 void tls_run_copy_loop(tls_state_t *tls, unsigned flags) FAST_FUNC;
@@ -1080,13 +1133,13 @@ unsigned bb_clk_tck(void) FAST_FUNC;
 
 #if SEAMLESS_COMPRESSION
 /* Autodetects gzip/bzip2 formats. fd may be in the middle of the file! */
-int setup_unzip_on_fd(int fd, int fail_if_not_compressed) FAST_FUNC;
+int setup_unzip_on_fd(int fd, int die_if_not_compressed) FAST_FUNC;
 /* Autodetects .gz etc */
-extern int open_zipped(const char *fname, int fail_if_not_compressed) FAST_FUNC;
+extern int open_zipped(const char *fname, int die_if_not_compressed) FAST_FUNC;
 extern void *xmalloc_open_zipped_read_close(const char *fname, size_t *maxsz_p) FAST_FUNC RETURNS_MALLOC;
 #else
 # define setup_unzip_on_fd(...) (0)
-# define open_zipped(fname, fail_if_not_compressed)  open((fname), O_RDONLY);
+# define open_zipped(fname, die_if_not_compressed)  open((fname), O_RDONLY);
 # define xmalloc_open_zipped_read_close(fname, maxsz_p) xmalloc_open_read_close((fname), (maxsz_p))
 #endif
 /* lzma has no signature, need a little helper. NB: exist only for ENABLE_FEATURE_SEAMLESS_LZMA=y */
@@ -1181,6 +1234,32 @@ const char *make_human_readable_str(unsigned long long size,
 char *bin2hex(char *dst, const char *src, int count) FAST_FUNC;
 /* Reverse */
 char* hex2bin(char *dst, const char *src, int count) FAST_FUNC;
+
+/* Returns strlen as a bonus */
+//size_t replace_char(char *s, char what, char with) FAST_FUNC;
+static inline size_t replace_char(char *str, char from, char to)
+{
+	char *p = str;
+	while (*p) {
+		if (*p == from)
+			*p = to;
+		p++;
+	}
+	return p - str;
+}
+
+extern const char c_escape_conv_str00[];
+#define c_escape_conv_str07 (c_escape_conv_str00+3)
+
+void FAST_FUNC xorbuf_3(void *dst, const void *src1, const void *src2, unsigned count);
+void FAST_FUNC xorbuf(void* buf, const void* mask, unsigned count);
+void FAST_FUNC xorbuf16_aligned_long(void* buf, const void* mask);
+void FAST_FUNC xorbuf64_3_aligned64(void *dst, const void *src1, const void *src2);
+#if BB_UNALIGNED_MEMACCESS_OK
+# define xorbuf16(buf,mask) xorbuf16_aligned_long(buf,mask)
+#else
+void FAST_FUNC xorbuf16(void* buf, const void* mask);
+#endif
 
 /* Generate a UUID */
 void generate_uuid(uint8_t *buf) FAST_FUNC;
@@ -1896,17 +1975,24 @@ extern char *pw_encrypt(const char *clear, const char *salt, int cleanup) FAST_F
 extern int obscure(const char *old, const char *newval, const struct passwd *pwdp) FAST_FUNC;
 /*
  * rnd is additional random input. New one is returned.
- * Useful if you call crypt_make_salt many times in a row:
- * rnd = crypt_make_salt(buf1, 4, 0);
- * rnd = crypt_make_salt(buf2, 4, rnd);
- * rnd = crypt_make_salt(buf3, 4, rnd);
+ * Useful if you call crypt_make_rand64encoded many times in a row:
+ * rnd = crypt_make_rand64encoded(buf1, 4, 0);
+ * rnd = crypt_make_rand64encoded(buf2, 4, rnd);
+ * rnd = crypt_make_rand64encoded(buf3, 4, rnd);
  * (otherwise we risk having same salt generated)
  */
-extern int crypt_make_salt(char *p, int cnt /*, int rnd*/) FAST_FUNC;
-/* "$N$" + sha_salt_16_bytes + NUL */
-#define MAX_PW_SALT_LEN (3 + 16 + 1)
+extern int crypt_make_rand64encoded(char *p, int cnt /*, int rnd*/) FAST_FUNC;
+/* Size of char salt[] to hold randomly-generated salt string
+ * sha256/512:
+ * "$5$" ["rounds=999999999$"] "<sha_salt_16_chars><NUL>"
+ * "$6$" ["rounds=999999999$"] "<sha_salt_16_chars><NUL>"
+ * #define MAX_PW_SALT_LEN (3 + sizeof("rounds=999999999$")-1 + 16 + 1)
+ * yescrypt:
+ * "$y$" <up to 8 params of up to 6 chars each> "$" <up to 86 chars salt><NUL>
+ * (86 chars are ascii64-encoded 64 binary bytes)
+ */
+#define MAX_PW_SALT_LEN (3 + 8*6 + 1 + 86 + 1)
 extern char* crypt_make_pw_salt(char p[MAX_PW_SALT_LEN], const char *algo) FAST_FUNC;
-
 
 /* Returns number of lines changed, or -1 on error */
 #if !(ENABLE_FEATURE_ADDUSER_TO_GROUP || ENABLE_FEATURE_DEL_USER_FROM_GROUP)
@@ -2050,6 +2136,10 @@ int64_t windows_read_key(int fd, char *buffer, int timeout) FAST_FUNC;
 int64_t safe_read_key(int fd, char *buffer, int timeout) FAST_FUNC;
 void read_key_ungets(char *buffer, const char *str, unsigned len) FAST_FUNC;
 
+int check_got_signal_and_poll(struct pollfd pfd[1], int timeout) FAST_FUNC;
+#if ENABLE_PLATFORM_MINGW32
+# define check_got_signal_and_poll(p, t) poll(p, 1, t)
+#endif
 
 #if ENABLE_FEATURE_EDITING
 /* It's NOT just ENABLEd or disabled. It's a number: */
@@ -2096,7 +2186,7 @@ typedef struct line_input_t {
 # if MAX_HISTORY
 	int cnt_history;
 	int cur_history;
-	int max_history; /* must never be <= 0 */
+	int max_history; /* must never be < 0 */
 #  if ENABLE_FEATURE_EDITING_SAVEHISTORY
 	/* meaning of this field depends on FEATURE_EDITING_SAVE_ON_EXIT:
 	 * if !FEATURE_EDITING_SAVE_ON_EXIT: "how many lines are
@@ -2162,33 +2252,6 @@ enum { COMM_LEN = 16 };
 # endif
 #endif
 
-struct smaprec {
-	unsigned long mapped_rw;
-	unsigned long mapped_ro;
-	unsigned long shared_clean;
-	unsigned long shared_dirty;
-	unsigned long private_clean;
-	unsigned long private_dirty;
-	unsigned long stack;
-	unsigned long smap_pss, smap_swap;
-	unsigned long smap_size;
-	// For mixed 32/64 userspace, 32-bit pmap still needs
-	// 64-bit field here to correctly show 64-bit processes:
-	unsigned long long smap_start;
-	// (strictly speaking, other fields need to be wider too,
-	// but they are in kbytes, not bytes, and they hold sizes,
-	// not start addresses, sizes tend to be less than 4 terabytes)
-	char smap_mode[5];
-	char *smap_name;
-};
-
-#if !ENABLE_PMAP
-#define procps_read_smaps(pid, total, cb, data) \
-	procps_read_smaps(pid, total)
-#endif
-int FAST_FUNC procps_read_smaps(pid_t pid, struct smaprec *total,
-		void (*cb)(struct smaprec *, void *), void *data);
-
 typedef struct procps_status_t {
 #if !ENABLE_PLATFORM_MINGW32
 	DIR *dir;
@@ -2224,7 +2287,13 @@ typedef struct procps_status_t {
 #endif
 	unsigned tty_major,tty_minor;
 #if ENABLE_FEATURE_TOPMEM
-	struct smaprec smaps;
+	unsigned long mapped_rw;
+	unsigned long mapped_ro;
+	unsigned long shared_clean;
+	unsigned long shared_dirty;
+	unsigned long private_clean;
+	unsigned long private_dirty;
+	unsigned long stack;
 #endif
 	char state[4];
 	/* basename of executable in exec(2), read from /proc/N/stat
@@ -2273,11 +2342,15 @@ void free_procps_scan(procps_status_t* sp) FAST_FUNC;
 procps_status_t* procps_scan(procps_status_t* sp, int flags) FAST_FUNC;
 /* Format cmdline (up to col chars) into char buf[size] */
 /* Puts [comm] if cmdline is empty (-> process is a kernel thread) */
-void read_cmdline(char *buf, int size, unsigned pid, const char *comm) FAST_FUNC;
+int read_cmdline(char *buf, int size, unsigned pid, const char *comm) FAST_FUNC;
 pid_t *find_pid_by_name(const char* procName) FAST_FUNC;
 pid_t *pidlist_reverse(pid_t *pidList) FAST_FUNC;
 int starts_with_cpu(const char *str) FAST_FUNC;
 unsigned get_cpu_count(void) FAST_FUNC;
+/* Some internals reused by pmap: */
+unsigned long FAST_FUNC fast_strtoul_10(char **endptr);
+unsigned long long FAST_FUNC fast_strtoull_16(char **endptr);
+char* FAST_FUNC skip_fields(char *str, int count);
 
 
 /* Use strict=1 if you process input from untrusted source:
@@ -2303,6 +2376,56 @@ char *decode_base64(char *dst, const char **pp_src) FAST_FUNC;
 char *decode_base32(char *dst, const char **pp_src) FAST_FUNC;
 void read_base64(FILE *src_stream, FILE *dst_stream, int flags) FAST_FUNC;
 
+int FAST_FUNC i2a64(int i);
+int FAST_FUNC a2i64(char c);
+char* FAST_FUNC num2str64_lsb_first(char *s, unsigned v, int n);
+
+enum {
+	/* how many bytes XYZ_end() fills */
+	MD5_OUTSIZE    = 16,
+	SHA1_OUTSIZE   = 20,
+	SHA256_OUTSIZE = 32,
+	SHA384_OUTSIZE = 48,
+	SHA512_OUTSIZE = 64,
+	//SHA3-224_OUTSIZE = 28,
+	/* size of input block */
+	SHA2_INSIZE     = 64,
+};
+
+#if defined CONFIG_FEATURE_USE_CNG_API
+struct bcrypt_hash_ctx_t {
+	void *handle;
+	void *hash_obj;
+	unsigned int output_size;
+};
+typedef struct bcrypt_hash_ctx_t md5_ctx_t;
+typedef struct bcrypt_hash_ctx_t sha1_ctx_t;
+typedef struct bcrypt_hash_ctx_t sha256_ctx_t;
+typedef struct bcrypt_hash_ctx_t sha384_ctx_t;
+typedef struct bcrypt_hash_ctx_t sha512_ctx_t;
+typedef struct sha3_ctx_t {
+	uint64_t state[25];
+	unsigned bytes_queued;
+	unsigned input_block_bytes;
+} sha3_ctx_t;
+void md5_begin(struct bcrypt_hash_ctx_t *ctx) FAST_FUNC;
+void sha1_begin(struct bcrypt_hash_ctx_t *ctx) FAST_FUNC;
+void sha256_begin(struct bcrypt_hash_ctx_t *ctx) FAST_FUNC;
+void sha384_begin(struct bcrypt_hash_ctx_t *ctx) FAST_FUNC;
+void sha512_begin(struct bcrypt_hash_ctx_t *ctx) FAST_FUNC;
+void generic_hash(struct bcrypt_hash_ctx_t *ctx, const void *buffer, size_t len) FAST_FUNC;
+unsigned generic_end(struct bcrypt_hash_ctx_t *ctx, void *resbuf) FAST_FUNC;
+# define md5_hash generic_hash
+# define sha1_hash generic_hash
+# define sha256_hash generic_hash
+# define sha384_hash generic_hash
+# define sha512_hash generic_hash
+# define md5_end generic_end
+# define sha1_end generic_end
+# define sha256_end generic_end
+# define sha384_end generic_end
+# define sha512_end generic_end
+#else
 typedef struct md5_ctx_t {
 	uint8_t wbuffer[64]; /* always correctly aligned for uint64_t */
 	void (*process_block)(struct md5_ctx_t*) FAST_FUNC;
@@ -2316,6 +2439,7 @@ typedef struct sha512_ctx_t {
 	uint64_t hash[8];
 	uint8_t wbuffer[128]; /* always correctly aligned for uint64_t */
 } sha512_ctx_t;
+typedef struct sha512_ctx_t sha384_ctx_t;
 typedef struct sha3_ctx_t {
 	uint64_t state[25];
 	unsigned bytes_queued;
@@ -2333,20 +2457,69 @@ void sha256_begin(sha256_ctx_t *ctx) FAST_FUNC;
 void sha512_begin(sha512_ctx_t *ctx) FAST_FUNC;
 void sha512_hash(sha512_ctx_t *ctx, const void *buffer, size_t len) FAST_FUNC;
 unsigned sha512_end(sha512_ctx_t *ctx, void *resbuf) FAST_FUNC;
+void sha384_begin(sha384_ctx_t *ctx) FAST_FUNC;
+#define sha384_hash sha512_hash
+unsigned sha384_end(sha384_ctx_t *ctx, void *resbuf) FAST_FUNC;
+#endif
 void sha3_begin(sha3_ctx_t *ctx) FAST_FUNC;
 void sha3_hash(sha3_ctx_t *ctx, const void *buffer, size_t len) FAST_FUNC;
 unsigned sha3_end(sha3_ctx_t *ctx, void *resbuf) FAST_FUNC;
+void FAST_FUNC sha256_block(const void *in, size_t len, uint8_t hash[32]);
 /* TLS benefits from knowing that sha1 and sha256 share these. Give them "agnostic" names too */
+#if defined CONFIG_FEATURE_USE_CNG_API
+typedef struct bcrypt_hash_ctx_t md5sha_ctx_t;
+#define md5sha_hash generic_hash
+#define sha_end generic_end
+#else
 typedef struct md5_ctx_t md5sha_ctx_t;
 #define md5sha_hash md5_hash
 #define sha_end sha1_end
-enum {
-	MD5_OUTSIZE    = 16,
-	SHA1_OUTSIZE   = 20,
-	SHA256_OUTSIZE = 32,
-	SHA512_OUTSIZE = 64,
-	SHA3_OUTSIZE   = 28,
-};
+#endif
+
+/* RFC 2104 HMAC (hash-based message authentication code) */
+#if !ENABLE_FEATURE_USE_CNG_API
+typedef struct hmac_ctx {
+	md5sha_ctx_t hashed_key_xor_ipad;
+	md5sha_ctx_t hashed_key_xor_opad;
+} hmac_ctx_t;
+#else
+typedef struct bcrypt_hash_ctx_t hmac_ctx_t;
+#endif
+#define HMAC_ONLY_SHA256 (!ENABLE_FEATURE_TLS_SHA1)
+typedef void md5sha_begin_func(md5sha_ctx_t *ctx) FAST_FUNC;
+#if !ENABLE_FEATURE_USE_CNG_API
+#if HMAC_ONLY_SHA256
+#define hmac_begin(ctx,key,key_size,begin) \
+	hmac_begin(ctx,key,key_size)
+#endif
+void FAST_FUNC hmac_begin(hmac_ctx_t *ctx, const uint8_t *key, unsigned key_size, md5sha_begin_func *begin);
+static ALWAYS_INLINE void hmac_hash(hmac_ctx_t *ctx, const void *in, size_t len)
+{
+	md5sha_hash(&ctx->hashed_key_xor_ipad, in, len);
+}
+#else
+# if HMAC_ONLY_SHA256
+#  define hmac_begin(pre,key,key_size,begin) \
+	_hmac_begin(pre, key, key_size, sha256_begin_hmac)
+# else
+#  define hmac_begin _hmac_begin
+# endif
+void _hmac_begin(hmac_ctx_t *pre, uint8_t *key, unsigned key_size,
+	BCRYPT_ALG_HANDLE alg_handle);
+void hmac_uninit(hmac_ctx_t *pre);
+#endif
+unsigned FAST_FUNC hmac_end(hmac_ctx_t *ctx, uint8_t *out);
+#if HMAC_ONLY_SHA256
+#define hmac_block(key,key_size,begin,in,sz,out) \
+        hmac_block(key,key_size,in,sz,out)
+#endif
+unsigned FAST_FUNC hmac_block(const uint8_t *key, unsigned key_size,
+		md5sha_begin_func *begin,
+		const void *in, unsigned sz,
+		uint8_t *out);
+/* HMAC helpers for TLS: */
+void FAST_FUNC hmac_hash_v(hmac_ctx_t *ctx, va_list va);
+unsigned hmac_peek_hash(hmac_ctx_t *ctx, uint8_t *out, ...);
 
 extern uint32_t *global_crc32_table;
 uint32_t *crc32_filltable(uint32_t *tbl256, int endian) FAST_FUNC;
@@ -2482,31 +2655,10 @@ extern struct globals *BB_GLOBAL_CONST ptr_to_globals;
 #define barrier() asm volatile ("":::"memory")
 
 #if defined(__clang_major__) && __clang_major__ >= 9
-/* Clang/llvm drops assignment to "constant" storage. Silently.
- * Needs serious convincing to not eliminate the store.
+/* {ASSIGN,XZALLOC}_CONST_PTR() are out-of-line functions
+ * to prevent clang from reading pointer before it is assigned.
  */
-static ALWAYS_INLINE void* not_const_pp(const void *p)
-{
-	void *pp;
-	asm volatile (
-		"# forget that p points to const"
-		: /*outputs*/ "=r" (pp)
-		: /*inputs*/ "0" (p)
-	);
-	return pp;
-}
-# if !ENABLE_PLATFORM_MINGW32
-# define ASSIGN_CONST_PTR(pptr, v) do { \
-	*(void**)not_const_pp(pptr) = (void*)(v); \
-	barrier(); \
-} while (0)
-#else
-/* On Windows it seems necessary for this to be a function too. */
-void ASSIGN_CONST_PTR(const void *pptr, const void *ptr) FAST_FUNC;
-#endif
-/* XZALLOC_CONST_PTR() is an out-of-line function to prevent
- * clang from reading pointer before it is assigned.
- */
+void ASSIGN_CONST_PTR(const void *pptr, void *v) FAST_FUNC;
 void XZALLOC_CONST_PTR(const void *pptr, size_t size) FAST_FUNC;
 #else
 # define ASSIGN_CONST_PTR(pptr, v) do { \

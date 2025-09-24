@@ -55,7 +55,7 @@ const char* FAST_FUNC
 shell_builtin_read(struct builtin_read_params *params)
 {
 	struct pollfd pfd[1];
-#define fd (pfd[0].fd) /* -u FD */
+#define fd (pfd->fd) /* -u FD */
 	unsigned err;
 	unsigned end_ms; /* -t TIMEOUT */
 	int nchars; /* -n NUM */
@@ -144,7 +144,7 @@ shell_builtin_read(struct builtin_read_params *params)
 		 * bash seems to ignore -p PROMPT for this use case.
 		 */
 		int r;
-		pfd[0].events = POLLIN;
+		pfd->events = POLLIN;
 		r = poll(pfd, 1, /*timeout:*/ 0);
 		/* Return 0 only if poll returns 1 ("one fd ready"), else return 1: */
 		return (const char *)(uintptr_t)(r <= 0);
@@ -209,8 +209,8 @@ shell_builtin_read(struct builtin_read_params *params)
 			 * 32-bit unix time wrapped (year 2038+).
 			 */
 			if (timeout <= 0) { /* already late? */
-				retval = (const char *)(uintptr_t)1;
-				goto ret;
+				retval = (const char *)(uintptr_t)2;
+				break;
 			}
 		}
 
@@ -219,15 +219,23 @@ shell_builtin_read(struct builtin_read_params *params)
 		 * regardless of SA_RESTART-ness of that signal!
 		 */
 		errno = 0;
-		pfd[0].events = POLLIN;
-//TODO race with a signal arriving just before the poll!
+		pfd->events = POLLIN;
+
 #if ENABLE_PLATFORM_MINGW32
-		/* Don't poll if timeout is -1, it hurts performance. */
+		/* Don't poll if timeout is -1, it hurts performance.  The
+		 * caution above about interrupts isn't relevant on Windows
+		 * where Ctrl-C causes an event, not a signal.
+		 */
 		if (timeout >= 0)
 #endif
-		if (poll(pfd, 1, timeout) <= 0) {
-			/* timed out, or EINTR */
+		/* test bb_got_signal, then poll(), atomically wrt signals */
+		if (check_got_signal_and_poll(pfd, timeout) <= 0) {
+			/* timed out, or some error */
 			err = errno;
+			if (!err) { /* timed out */
+				retval = (const char *)(uintptr_t)2;
+				break;
+			}
 			retval = (const char *)(uintptr_t)1;
 			goto ret;
 		}
@@ -238,15 +246,18 @@ shell_builtin_read(struct builtin_read_params *params)
 			key = windows_read_key(fd, NULL, timeout);
 			if (key == 0x03) {
 				/* ^C pressed */
+				retval = (const char *)(uintptr_t)3;
+				goto ret;
+			}
+			else if (key == -1) {
+				/* timeout */
 				retval = (const char *)(uintptr_t)2;
-				goto ret;
-			}
-			else if (key == -1 || (key == 0x1a && bufpos == 0)) {
-				/* timeout or ^Z at start of buffer */
+				break;
+			} else if (key == 0x1a && bufpos == 0) {
+				/* ^Z at start of buffer */
 				retval = (const char *)(uintptr_t)1;
-				goto ret;
-			}
-			else if (key == '\b') {
+				break;
+			} else if (key == '\b') {
 				if (bufpos > 0) {
 					--bufpos;
 					++nchars;
@@ -278,7 +289,7 @@ shell_builtin_read(struct builtin_read_params *params)
 				 *   and exit BS context.
 				 * - CR LF not in BS context: replace CR with LF */
 				buffer[--bufpos] = c;
-				++nchars;
+				nchars += 1 + (backslash == 2);
 			}
 		} else if (backslash == 2) {
 			/* We saw BS CR ??, keep escaped CR, exit BS context,
@@ -298,6 +309,9 @@ shell_builtin_read(struct builtin_read_params *params)
 				backslash = 0;
 				if (c != '\n')
 					goto put;
+#if ENABLE_PLATFORM_MINGW32
+				++nchars;
+#endif
 				continue;
 			}
 			if (c == '\\') {
@@ -338,7 +352,7 @@ shell_builtin_read(struct builtin_read_params *params)
 		}
  put:
 		bufpos++;
-	} while (--nchars);
+	} while (IF_PLATFORM_MINGW32(backslash ||) --nchars);
 
 	if (argv[0]) {
 		/* Remove trailing space $IFS chars */

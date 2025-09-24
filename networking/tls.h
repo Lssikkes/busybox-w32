@@ -11,6 +11,7 @@
 #include "libbb.h"
 
 
+#if !ENABLE_FEATURE_TLS_SCHANNEL
 /* Config tweaks */
 #define HAVE_NATIVE_INT64
 #undef  USE_1024_KEY_SPEED_OPTIMIZATIONS
@@ -82,10 +83,9 @@ typedef  int16_t  int16;
 
 void tls_get_random(void *buf, unsigned len) FAST_FUNC;
 
-void xorbuf(void* buf, const void* mask, unsigned count) FAST_FUNC;
-
 #define ALIGNED_long ALIGNED(sizeof(long))
-void xorbuf_aligned_AES_BLOCK_SIZE(void* buf, const void* mask) FAST_FUNC;
+#define xorbuf_aligned_AES_BLOCK_SIZE(dst,src) xorbuf16_aligned_long(dst,src)
+#define xorbuf_AES_BLOCK_SIZE(dst,src)         xorbuf16(dst,src)
 
 #define matrixCryptoGetPrngData(buf, len, userPtr) (tls_get_random(buf, len), PS_SUCCESS)
 
@@ -120,3 +120,4 @@ void curve_P256_compute_pubkey_and_premaster(
 void curve_P256_compute_pubkey_and_premaster_NEW(
 		uint8_t *pubkey2x32, uint8_t *premaster32,
 		const uint8_t *peerkey2x32) FAST_FUNC;
+#endif

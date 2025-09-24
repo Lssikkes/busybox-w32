@@ -160,7 +160,7 @@ int FAST_FUNC terminal_mode(int reset)
 					mode |= VT_INPUT;
 				}
 
-				if (newmode != oldmode) {
+				if (reset && newmode != oldmode) {
 					if (!SetConsoleMode(h, newmode)) {
 						if (mode >= 4)
 							mode &= ~VT_INPUT;
@@ -1182,7 +1182,7 @@ char *winansi_fgets(char *s, int size, FILE *stream)
 /* Ensure that isatty(fd) returns 0 for the NUL device */
 int mingw_isatty(int fd)
 {
-	int result = _isatty(fd);
+	int result = _isatty(fd) != 0;
 
 	if (result) {
 		HANDLE handle = (HANDLE) _get_osfhandle(fd);

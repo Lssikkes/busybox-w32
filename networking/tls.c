@@ -10,18 +10,19 @@
 //Config.src also defines FEATURE_TLS_SHA1 option
 
 //kbuild:lib-$(CONFIG_TLS) += tls.o
-//kbuild:lib-$(CONFIG_TLS) += tls_pstm.o
-//kbuild:lib-$(CONFIG_TLS) += tls_pstm_montgomery_reduce.o
-//kbuild:lib-$(CONFIG_TLS) += tls_pstm_mul_comba.o
-//kbuild:lib-$(CONFIG_TLS) += tls_pstm_sqr_comba.o
-//kbuild:lib-$(CONFIG_TLS) += tls_aes.o
-//kbuild:lib-$(CONFIG_TLS) += tls_aesgcm.o
-//kbuild:lib-$(CONFIG_TLS) += tls_rsa.o
-//kbuild:lib-$(CONFIG_TLS) += tls_fe.o
-//kbuild:lib-$(CONFIG_TLS) += tls_sp_c32.o
+//kbuild:lib-$(CONFIG_FEATURE_TLS_INTERNAL) += tls_pstm.o
+//kbuild:lib-$(CONFIG_FEATURE_TLS_INTERNAL) += tls_pstm_montgomery_reduce.o
+//kbuild:lib-$(CONFIG_FEATURE_TLS_INTERNAL) += tls_pstm_mul_comba.o
+//kbuild:lib-$(CONFIG_FEATURE_TLS_INTERNAL) += tls_pstm_sqr_comba.o
+//kbuild:lib-$(CONFIG_FEATURE_TLS_INTERNAL) += tls_aes.o
+//kbuild:lib-$(CONFIG_FEATURE_TLS_INTERNAL) += tls_aesgcm.o
+//kbuild:lib-$(CONFIG_FEATURE_TLS_INTERNAL) += tls_rsa.o
+//kbuild:lib-$(CONFIG_FEATURE_TLS_INTERNAL) += tls_fe.o
+//kbuild:lib-$(CONFIG_FEATURE_TLS_INTERNAL) += tls_sp_c32.o
 
 #include "tls.h"
 
+#if !ENABLE_FEATURE_TLS_SCHANNEL
 // Usually enabled. You can disable some of them to force only
 // specific ciphers to be advertized to server.
 // (this would not exclude code to handle disabled ciphers, no code size win)
@@ -188,8 +189,6 @@
 #define TLS_MAX_OUTBUF          (1 << 14)
 
 enum {
-	SHA_INSIZE     = 64,
-
 	AES128_KEYSIZE = 16,
 	AES256_KEYSIZE = 32,
 
@@ -335,34 +334,6 @@ void FAST_FUNC tls_get_random(void *buf, unsigned len)
 		xfunc_die();
 }
 
-static void xorbuf3(void *dst, const void *src1, const void *src2, unsigned count)
-{
-	uint8_t *d = dst;
-	const uint8_t *s1 = src1;
-	const uint8_t* s2 = src2;
-	while (count--)
-		*d++ = *s1++ ^ *s2++;
-}
-
-void FAST_FUNC xorbuf(void *dst, const void *src, unsigned count)
-{
-	xorbuf3(dst, dst, src, count);
-}
-
-void FAST_FUNC xorbuf_aligned_AES_BLOCK_SIZE(void *dst, const void *src)
-{
-	unsigned long *d = dst;
-	const unsigned long *s = src;
-	d[0] ^= s[0];
-#if ULONG_MAX <= 0xffffffffffffffff
-	d[1] ^= s[1];
- #if ULONG_MAX == 0xffffffff
-	d[2] ^= s[2];
-	d[3] ^= s[3];
- #endif
-#endif
-}
-
 #if !TLS_DEBUG_HASH
 # define hash_handshake(tls, fmt, buffer, len) \
          hash_handshake(tls, buffer, len)
@@ -392,128 +363,6 @@ static void hash_handshake(tls_state_t *tls, const char *fmt, const void *buffer
 #else
 # define TLS_MAC_SIZE(tls) (tls)->MAC_size
 #endif
-
-// RFC 2104:
-// HMAC(key, text) based on a hash H (say, sha256) is:
-// ipad = [0x36 x INSIZE]
-// opad = [0x5c x INSIZE]
-// HMAC(key, text) = H((key XOR opad) + H((key XOR ipad) + text))
-//
-// H(key XOR opad) and H(key XOR ipad) can be precomputed
-// if we often need HMAC hmac with the same key.
-//
-// text is often given in disjoint pieces.
-typedef struct hmac_precomputed {
-	md5sha_ctx_t hashed_key_xor_ipad;
-	md5sha_ctx_t hashed_key_xor_opad;
-} hmac_precomputed_t;
-
-typedef void md5sha_begin_func(md5sha_ctx_t *ctx) FAST_FUNC;
-#if !ENABLE_FEATURE_TLS_SHA1
-#define hmac_begin(pre,key,key_size,begin) \
-	hmac_begin(pre,key,key_size)
-#define begin sha256_begin
-#endif
-static void hmac_begin(hmac_precomputed_t *pre, uint8_t *key, unsigned key_size, md5sha_begin_func *begin)
-{
-	uint8_t key_xor_ipad[SHA_INSIZE];
-	uint8_t key_xor_opad[SHA_INSIZE];
-//	uint8_t tempkey[SHA1_OUTSIZE < SHA256_OUTSIZE ? SHA256_OUTSIZE : SHA1_OUTSIZE];
-	unsigned i;
-
-	// "The authentication key can be of any length up to INSIZE, the
-	// block length of the hash function.  Applications that use keys longer
-	// than INSIZE bytes will first hash the key using H and then use the
-	// resultant OUTSIZE byte string as the actual key to HMAC."
-	if (key_size > SHA_INSIZE) {
-		bb_simple_error_msg_and_die("HMAC key>64"); //does not happen (yet?)
-//		md5sha_ctx_t ctx;
-//		begin(&ctx);
-//		md5sha_hash(&ctx, key, key_size);
-//		key_size = sha_end(&ctx, tempkey);
-//		//key = tempkey; - right? RIGHT? why does it work without this?
-//		// because SHA_INSIZE is 64, but hmac() is always called with
-//		// key_size = tls->MAC_size = SHA1/256_OUTSIZE (20 or 32),
-//		// and prf_hmac_sha256() -> hmac_sha256() key sizes are:
-//		// - RSA_PREMASTER_SIZE is 48
-//		// - CURVE25519_KEYSIZE is 32
-//		// - master_secret[] is 48
-	}
-
-	for (i = 0; i < key_size; i++) {
-		key_xor_ipad[i] = key[i] ^ 0x36;
-		key_xor_opad[i] = key[i] ^ 0x5c;
-	}
-	for (; i < SHA_INSIZE; i++) {
-		key_xor_ipad[i] = 0x36;
-		key_xor_opad[i] = 0x5c;
-	}
-
-	begin(&pre->hashed_key_xor_ipad);
-	begin(&pre->hashed_key_xor_opad);
-	md5sha_hash(&pre->hashed_key_xor_ipad, key_xor_ipad, SHA_INSIZE);
-	md5sha_hash(&pre->hashed_key_xor_opad, key_xor_opad, SHA_INSIZE);
-}
-#undef begin
-
-static unsigned hmac_sha_precomputed_v(
-		hmac_precomputed_t *pre,
-		uint8_t *out,
-		va_list va)
-{
-	uint8_t *text;
-	unsigned len;
-
-	/* pre->hashed_key_xor_ipad contains unclosed "H((key XOR ipad) +" state */
-	/* pre->hashed_key_xor_opad contains unclosed "H((key XOR opad) +" state */
-
-	/* calculate out = H((key XOR ipad) + text) */
-	while ((text = va_arg(va, uint8_t*)) != NULL) {
-		unsigned text_size = va_arg(va, unsigned);
-		md5sha_hash(&pre->hashed_key_xor_ipad, text, text_size);
-	}
-	len = sha_end(&pre->hashed_key_xor_ipad, out);
-
-	/* out = H((key XOR opad) + out) */
-	md5sha_hash(&pre->hashed_key_xor_opad, out, len);
-	return sha_end(&pre->hashed_key_xor_opad, out);
-}
-
-static unsigned hmac_sha_precomputed(hmac_precomputed_t *pre_init, uint8_t *out, ...)
-{
-	hmac_precomputed_t pre;
-	va_list va;
-	unsigned len;
-
-	va_start(va, out);
-	pre = *pre_init; /* struct copy */
-	len = hmac_sha_precomputed_v(&pre, out, va);
-	va_end(va);
-	return len;
-}
-
-#if !ENABLE_FEATURE_TLS_SHA1
-#define hmac(tls,out,key,key_size,...) \
-	hmac(out,key,key_size, __VA_ARGS__)
-#endif
-static unsigned hmac(tls_state_t *tls, uint8_t *out, uint8_t *key, unsigned key_size, ...)
-{
-	hmac_precomputed_t pre;
-	va_list va;
-	unsigned len;
-
-	va_start(va, key_size);
-
-	hmac_begin(&pre, key, key_size,
-			(ENABLE_FEATURE_TLS_SHA1 && tls->MAC_size == SHA1_OUTSIZE)
-				? sha1_begin
-				: sha256_begin
-	);
-	len = hmac_sha_precomputed_v(&pre, out, va);
-
-	va_end(va);
-	return len;
-}
 
 // RFC 5246:
 // 5.  HMAC and the Pseudorandom Function
@@ -559,7 +408,7 @@ static void prf_hmac_sha256(/*tls_state_t *tls,*/
 		const char *label,
 		uint8_t *seed, unsigned seed_size)
 {
-	hmac_precomputed_t pre;
+	hmac_ctx_t ctx;
 	uint8_t a[TLS_MAX_MAC_SIZE];
 	uint8_t *out_p = outbuf;
 	unsigned label_size = strlen(label);
@@ -569,26 +418,27 @@ static void prf_hmac_sha256(/*tls_state_t *tls,*/
 #define SEED   label, label_size, seed, seed_size
 #define A      a, MAC_size
 
-	hmac_begin(&pre, secret, secret_size, sha256_begin);
+	hmac_begin(&ctx, secret, secret_size, sha256_begin_hmac);
 
 	/* A(1) = HMAC_hash(secret, seed) */
-	hmac_sha_precomputed(&pre, a, SEED, NULL);
+	hmac_peek_hash(&ctx, a, SEED, NULL);
 
 	for (;;) {
 		/* HMAC_hash(secret, A(1) + seed) */
 		if (outbuf_size <= MAC_size) {
 			/* Last, possibly incomplete, block */
 			/* (use a[] as temp buffer) */
-			hmac_sha_precomputed(&pre, a, A, SEED, NULL);
+			hmac_peek_hash(&ctx, a, A, SEED, NULL);
 			memcpy(out_p, a, outbuf_size);
+			hmac_uninit(&ctx);
 			return;
 		}
 		/* Not last block. Store directly to result buffer */
-		hmac_sha_precomputed(&pre, out_p, A, SEED, NULL);
+		hmac_peek_hash(&ctx, out_p, A, SEED, NULL);
 		out_p += MAC_size;
 		outbuf_size -= MAC_size;
 		/* A(2) = HMAC_hash(secret, A(1)) */
-		hmac_sha_precomputed(&pre, a, A, NULL);
+		hmac_peek_hash(&ctx, a, A, NULL);
 	}
 #undef A
 #undef SECRET
@@ -655,6 +505,32 @@ static void *tls_get_zeroed_outbuf(tls_state_t *tls, int len)
 	return record;
 }
 
+/* Calculate the HMAC over the list of blocks */
+#if !ENABLE_FEATURE_TLS_SHA1
+#define hmac_blocks(tls,out,key,key_size,...) \
+	hmac_blocks(out,key,key_size, __VA_ARGS__)
+#endif
+static unsigned hmac_blocks(tls_state_t *tls, uint8_t *out, uint8_t *key, unsigned key_size, ...)
+{
+	hmac_ctx_t ctx;
+	va_list va;
+	unsigned len;
+
+	hmac_begin(&ctx, key, key_size,
+			(ENABLE_FEATURE_TLS_SHA1 && tls->MAC_size == SHA1_OUTSIZE)
+				? sha1_begin_hmac
+				: sha256_begin_hmac
+	);
+
+	va_start(va, key_size);
+	hmac_hash_v(&ctx, va);
+	va_end(va);
+
+	len = hmac_end(&ctx, out);
+	hmac_uninit(&ctx);
+	return len;
+}
+
 static void xwrite_encrypted_and_hmac_signed(tls_state_t *tls, unsigned size, unsigned type)
 {
 	uint8_t *buf = tls->outbuf + OUTBUF_PFX;
@@ -676,7 +552,7 @@ static void xwrite_encrypted_and_hmac_signed(tls_state_t *tls, unsigned size, un
 	xhdr->len16_lo = size & 0xff;
 
 	/* Calculate MAC signature */
-	hmac(tls, buf + size, /* result */
+	hmac_blocks(tls, buf + size, /* result */
 		tls->client_write_MAC_key, TLS_MAC_SIZE(tls),
 		&tls->write_seq64_be, sizeof(tls->write_seq64_be),
 		xhdr, RECHDR_LEN,
@@ -865,8 +741,13 @@ static void xwrite_encrypted_aesgcm(tls_state_t *tls, unsigned size, unsigned ty
 		cnt++;
 		COUNTER(nonce) = htonl(cnt); /* yes, first cnt here is 2 (!) */
 		aes_encrypt_one_block(&tls->aes_encrypt, nonce, scratch);
-		n = remaining > AES_BLOCK_SIZE ? AES_BLOCK_SIZE : remaining;
-		xorbuf(buf, scratch, n);
+		if (remaining >= AES_BLOCK_SIZE) {
+			n = AES_BLOCK_SIZE;
+			xorbuf_AES_BLOCK_SIZE(buf, scratch);
+		} else {
+			n = remaining;
+			xorbuf(buf, scratch, n);
+		}
 		buf += n;
 		remaining -= n;
 	}
@@ -1024,7 +905,7 @@ static void tls_aesgcm_decrypt(tls_state_t *tls, uint8_t *buf, int size)
 		COUNTER(nonce) = htonl(cnt); /* yes, first cnt here is 2 (!) */
 		aes_encrypt_one_block(&tls->aes_decrypt, nonce, scratch);
 		n = remaining > AES_BLOCK_SIZE ? AES_BLOCK_SIZE : remaining;
-		xorbuf3(buf, scratch, buf + 8, n);
+		xorbuf_3(buf, scratch, buf + 8, n);
 		buf += n;
 		remaining -= n;
 	}
@@ -2481,3 +2362,490 @@ void FAST_FUNC tls_run_copy_loop(tls_state_t *tls, unsigned flags)
 		}
 	}
 }
+#else
+#include <stdbool.h>
+
+#if ENABLE_FEATURE_TLS_SCHANNEL_1_3
+#include <subauth.h>
+#endif
+
+#define SCHANNEL_USE_BLACKLISTS
+
+#include <security.h>
+#include <schannel.h>
+
+
+#define BB_SCHANNEL_ISC_FLAGS                                                                                             \
+    (ISC_REQ_ALLOCATE_MEMORY | ISC_REQ_CONFIDENTIALITY | ISC_REQ_INTEGRITY | ISC_REQ_REPLAY_DETECT |                   \
+     ISC_REQ_SEQUENCE_DETECT | ISC_REQ_STREAM | ISC_REQ_USE_SUPPLIED_CREDS)
+
+#define SEC_STATUS_FAIL(status) ((status) != SEC_E_OK)
+
+static char *hresult_to_error_string(HRESULT result) {
+	char *output = NULL;
+
+	FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM
+				   | FORMAT_MESSAGE_IGNORE_INSERTS |
+				   FORMAT_MESSAGE_MAX_WIDTH_MASK, NULL, result,
+				   MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+				   (char *) &output, 0, NULL);
+	return output;
+}
+
+static void init_sec_buffer(SecBuffer *buffer, void *pvBuffer, unsigned long cbBuffer, unsigned long BufferType) {
+    buffer->BufferType = BufferType;
+    buffer->cbBuffer = cbBuffer;
+    buffer->pvBuffer = pvBuffer;
+}
+
+#define init_sec_buffer_empty(buffer, BufferType) init_sec_buffer(buffer, NULL, 0, BufferType)
+
+static void init_sec_buffer_desc(SecBufferDesc *desc, SecBuffer *buffers, unsigned long buffer_count) {
+    desc->ulVersion = SECBUFFER_VERSION;
+    desc->cBuffers = buffer_count;
+    desc->pBuffers = buffers;
+}
+
+static ssize_t tls_read(tls_state_t *state, char *buf, ssize_t len) {
+	ssize_t amount_read = 0;
+
+	if (state->connection_state > BB_SCHANNEL_OPEN) {
+		goto Success;
+	}
+
+	while (len > 0) {
+		if (state->out_buffer) {
+			unsigned long copy_amount =
+			    min(len, (ssize_t)state->out_buffer_length);
+			memcpy(buf, state->out_buffer, copy_amount);
+
+			amount_read += copy_amount;
+			buf += copy_amount;
+			len -= copy_amount;
+
+			if (copy_amount == state->out_buffer_length) {
+				if (state->out_buffer_extra > 0) {
+					memmove(
+					    state->in_buffer,
+					    state->in_buffer +
+					        (state->in_buffer_offset - state->out_buffer_extra),
+					    state->in_buffer_offset - (state->in_buffer_offset -
+					                               state->out_buffer_extra));
+					state->in_buffer_offset = state->out_buffer_extra;
+				} else {
+					state->in_buffer_offset = 0;
+				}
+
+				state->out_buffer = NULL;
+				state->out_buffer_length = 0;
+				state->out_buffer_extra = 0;
+
+			} else {
+				state->out_buffer_length -= copy_amount;
+				state->out_buffer += copy_amount;
+			}
+		} else {
+			SecBuffer buffers[4];
+			SecBufferDesc desc;
+			SECURITY_STATUS status;
+
+			init_sec_buffer(&buffers[0],
+			                state->in_buffer,
+			                state->in_buffer_offset,
+			                SECBUFFER_DATA);
+			init_sec_buffer_empty(&buffers[1], SECBUFFER_EMPTY);
+			init_sec_buffer_empty(&buffers[2], SECBUFFER_EMPTY);
+			init_sec_buffer_empty(&buffers[3], SECBUFFER_EMPTY);
+
+			init_sec_buffer_desc(&desc, buffers, _countof(buffers));
+
+			status = DecryptMessage(&state->ctx_handle, &desc, 0, NULL);
+
+			switch (status) {
+				case SEC_E_OK: {
+					state->out_buffer = buffers[1].pvBuffer;
+					state->out_buffer_length = buffers[1].cbBuffer;
+					state->out_buffer_extra = state->in_buffer_offset;
+
+					if (buffers[3].BufferType == SECBUFFER_EXTRA) {
+						state->out_buffer_extra = buffers[3].cbBuffer;
+					} else {
+						state->out_buffer_extra = 0;
+					}
+
+					continue;
+				}
+				case SEC_I_CONTEXT_EXPIRED: {
+					// Shut down the connection
+					state->connection_state = BB_SCHANNEL_CLOSED;
+					goto Success;
+				}
+				case SEC_E_INCOMPLETE_MESSAGE: {
+					int result = safe_read(state->ifd,
+						state->in_buffer + state->in_buffer_offset,
+						sizeof(state->in_buffer) - state->in_buffer_offset);
+					if (result == 0) {
+						state->connection_state = BB_SCHANNEL_CLOSED;
+						goto Success;
+					} else if (result < 0) {
+						bb_error_msg_and_die("schannel: read() failed");
+					}
+
+					state->in_buffer_offset += result;
+					continue;
+				}
+				case SEC_I_RENEGOTIATE: {
+					DWORD flags = BB_SCHANNEL_ISC_FLAGS;
+
+					SecBuffer in_buffers[2];
+					SecBufferDesc in_buffers_desc;
+
+					SecBuffer out_buffers[2];
+					SecBufferDesc out_buffers_desc;
+
+					init_sec_buffer(&in_buffers[0],
+									buffers[3].pvBuffer,
+									buffers[3].cbBuffer,
+									SECBUFFER_TOKEN);
+					init_sec_buffer_empty(&in_buffers[1], SECBUFFER_EMPTY);
+
+					init_sec_buffer_empty(&out_buffers[0], SECBUFFER_TOKEN);
+					init_sec_buffer_empty(&out_buffers[1], SECBUFFER_ALERT);
+
+					init_sec_buffer_desc(
+						&in_buffers_desc, in_buffers, _countof(in_buffers));
+					init_sec_buffer_desc(
+						&out_buffers_desc, out_buffers, _countof(out_buffers));
+
+					status = InitializeSecurityContextA(&state->cred_handle,
+														&state->ctx_handle,
+														state->hostname,
+														flags,
+														0,
+														0,
+														&in_buffers_desc,
+														0,
+														&state->ctx_handle,
+														&out_buffers_desc,
+														&flags,
+														0);
+
+					if (SEC_STATUS_FAIL(status)) {
+						bb_error_msg_and_die("schannel: renegotiate failed: (0x%08lx): %s",
+							status, hresult_to_error_string(status));
+					}
+
+					if (in_buffers[1].BufferType == SECBUFFER_EXTRA) {
+						memmove(state->in_buffer,
+								state->in_buffer + (state->in_buffer_offset -
+													in_buffers[1].cbBuffer),
+								in_buffers[1].cbBuffer);
+						state->in_buffer_offset = in_buffers[1].cbBuffer;
+					} else {
+						state->in_buffer_offset = 0;
+					}
+
+					continue;
+				}
+				default: {
+					bb_error_msg_and_die("schannel: DecryptMessage failed: (0x%08lx): %s", 
+						status, hresult_to_error_string(status));
+				}
+			}
+		}
+	}
+
+Success:
+	return amount_read;
+}
+
+static void tls_write(tls_state_t *state, char *buf, size_t len) {
+	if (state->connection_state > BB_SCHANNEL_OPEN) {
+		bb_error_msg_and_die("schannel: attempted to write to a closed connection");
+	}
+
+	while (len > 0) {
+		SECURITY_STATUS status;
+		unsigned long copy_amount =
+		    min(len, (size_t)state->stream_sizes.cbMaximumMessage);
+		char *write_buffer = _alloca(sizeof(state->in_buffer));
+
+		SecBuffer buffers[4];
+		SecBufferDesc desc;
+
+		init_sec_buffer(&buffers[0],
+		                write_buffer,
+		                state->stream_sizes.cbHeader,
+		                SECBUFFER_STREAM_HEADER);
+		init_sec_buffer(&buffers[1],
+		                write_buffer + state->stream_sizes.cbHeader,
+		                copy_amount,
+		                SECBUFFER_DATA);
+		init_sec_buffer(&buffers[2],
+		                write_buffer + state->stream_sizes.cbHeader +
+		                    copy_amount,
+		                state->stream_sizes.cbTrailer,
+		                SECBUFFER_STREAM_TRAILER);
+		init_sec_buffer_empty(&buffers[3], SECBUFFER_EMPTY);
+
+		init_sec_buffer_desc(&desc, buffers, _countof(buffers));
+
+		memcpy(buffers[1].pvBuffer, buf, copy_amount);
+
+		status = EncryptMessage(&state->ctx_handle, 0, &desc, 0);
+		if (SEC_STATUS_FAIL(status)) {
+			bb_error_msg_and_die("schannel: EncryptMessage failed: (0x%08lx): %s", 
+				status, hresult_to_error_string(status));
+		}
+
+		xwrite(state->ofd, write_buffer,
+			   buffers[0].cbBuffer + buffers[1].cbBuffer +
+			   buffers[2].cbBuffer);
+
+		len -= copy_amount;
+	}
+}
+
+static void tls_disconnect(tls_state_t * state) {
+	SECURITY_STATUS status;
+
+	DWORD token = SCHANNEL_SHUTDOWN;
+	DWORD flags = BB_SCHANNEL_ISC_FLAGS;
+
+	SecBuffer buf_token;
+	SecBufferDesc buf_token_desc;
+
+	SecBuffer out_buffer;
+	SecBufferDesc out_buffer_desc;
+
+	if (state->connection_state == BB_SCHANNEL_CLOSED_AND_FREED)
+		return;
+	state->connection_state = BB_SCHANNEL_CLOSED_AND_FREED;
+
+	init_sec_buffer(&buf_token, &token, sizeof(token), SECBUFFER_TOKEN);
+	init_sec_buffer_desc(&buf_token_desc, &buf_token, 1);
+
+	ApplyControlToken(&state->ctx_handle, &buf_token_desc);
+
+	init_sec_buffer_empty(&out_buffer, SECBUFFER_TOKEN);
+	init_sec_buffer_desc(&out_buffer_desc, &out_buffer, 1);
+
+	status = InitializeSecurityContextA(&state->cred_handle,
+	                                    &state->ctx_handle,
+	                                    state->hostname,
+	                                    flags,
+	                                    0,
+	                                    0,
+	                                    NULL,
+	                                    0,
+	                                    &state->ctx_handle,
+	                                    &out_buffer_desc,
+	                                    &flags,
+	                                    0);
+
+	if ((status == SEC_E_OK) || (status == SEC_I_CONTEXT_EXPIRED)) {
+		write(state->ofd, out_buffer.pvBuffer, out_buffer.cbBuffer);
+		FreeContextBuffer(out_buffer.pvBuffer);
+	}
+
+	DeleteSecurityContext(&state->ctx_handle);
+	FreeCredentialsHandle(&state->cred_handle);
+	free(state->hostname);
+}
+
+
+void FAST_FUNC tls_handshake(tls_state_t *state, const char *hostname) {
+	SECURITY_STATUS status;
+
+#if ENABLE_FEATURE_TLS_SCHANNEL_1_3
+	SCH_CREDENTIALS credential = {.dwVersion = SCH_CREDENTIALS_VERSION,
+		.dwCredFormat = 0,
+		.cCreds = 0,
+		.paCred = NULL,
+		.hRootStore = NULL,
+		.cMappers = 0,
+		.aphMappers = NULL,
+		.dwSessionLifespan = 0,
+		.dwFlags =
+			SCH_CRED_AUTO_CRED_VALIDATION | SCH_CRED_NO_DEFAULT_CREDS |
+			SCH_USE_STRONG_CRYPTO,
+		.cTlsParameters = 0,
+		.pTlsParameters = NULL
+	};
+#else
+	SCHANNEL_CRED credential = {.dwVersion = SCHANNEL_CRED_VERSION,
+		.cCreds = 0,
+		.paCred = NULL,
+		.hRootStore = NULL,
+		.cMappers = 0,
+		.aphMappers = NULL,
+		.cSupportedAlgs = 0,
+		.palgSupportedAlgs = NULL,
+		.grbitEnabledProtocols =
+			SP_PROT_TLS1_0_CLIENT | SP_PROT_TLS1_1_CLIENT |
+			SP_PROT_TLS1_2_CLIENT,
+		.dwMinimumCipherStrength = 0,
+		.dwMaximumCipherStrength = 0,
+		.dwSessionLifespan = 0,
+		.dwFlags =
+			SCH_CRED_AUTO_CRED_VALIDATION | SCH_CRED_NO_DEFAULT_CREDS |
+			SCH_USE_STRONG_CRYPTO,
+		.dwCredFormat = 0
+	};
+#endif
+
+	state->in_buffer_offset = 0;
+
+	state->out_buffer = NULL;
+	state->out_buffer_length = 0;
+	state->out_buffer_extra = 0;
+
+	state->hostname = xstrdup(hostname);
+	state->initialized = false;
+	state->connection_state = BB_SCHANNEL_OPEN;
+
+	if (SEC_STATUS_FAIL(status = AcquireCredentialsHandleA(NULL,
+	                                                       (SEC_CHAR *)UNISP_NAME_A,
+	                                                       SECPKG_CRED_OUTBOUND,
+	                                                       NULL,
+	                                                       &credential,
+	                                                       NULL,
+	                                                       NULL,
+	                                                       &state->cred_handle,
+	                                                       NULL))) {
+		bb_error_msg_and_die("schannel: AcquireCredentialsHandleA failed: (0x%08lx): %s",
+			status, hresult_to_error_string(status));
+	}
+
+	// InitializeSecurityContext loop
+	while (true) {
+		DWORD flags = BB_SCHANNEL_ISC_FLAGS;
+
+		SecBuffer in_buffers[2];
+		SecBufferDesc in_buffers_desc;
+
+		SecBuffer out_buffers[2];
+		SecBufferDesc out_buffers_desc;
+
+		init_sec_buffer(&in_buffers[0],
+		                state->in_buffer,
+		                state->in_buffer_offset,
+		                SECBUFFER_TOKEN);
+		init_sec_buffer_empty(&in_buffers[1], SECBUFFER_EMPTY);
+
+		init_sec_buffer_empty(&out_buffers[0], SECBUFFER_TOKEN);
+		init_sec_buffer_empty(&out_buffers[1], SECBUFFER_ALERT);
+
+		init_sec_buffer_desc(
+		    &in_buffers_desc, in_buffers, _countof(in_buffers));
+		init_sec_buffer_desc(
+		    &out_buffers_desc, out_buffers, _countof(out_buffers));
+
+		status = InitializeSecurityContextA(
+		    &state->cred_handle,
+		    state->initialized ? &state->ctx_handle : NULL,
+		    state->hostname,
+		    flags,
+		    0,
+		    0,
+		    state->initialized ? &in_buffers_desc : NULL,
+		    0,
+		    &state->ctx_handle,
+		    &out_buffers_desc,
+		    &flags,
+		    0);
+
+		state->initialized = true;
+
+		if (in_buffers[1].BufferType == SECBUFFER_EXTRA) {
+			memmove(state->in_buffer,
+			        state->in_buffer +
+			            (state->in_buffer_offset - in_buffers[1].cbBuffer),
+			        in_buffers[1].cbBuffer);
+			state->in_buffer_offset = in_buffers[1].cbBuffer;
+		}
+
+		switch (status) {
+			case SEC_E_OK: {
+				state->in_buffer_offset =
+					(in_buffers[1].BufferType == SECBUFFER_EXTRA)
+						? in_buffers[1].cbBuffer
+						: 0;
+
+				if (out_buffers[0].cbBuffer > 0) {
+					xwrite(state->ifd, out_buffers[0].pvBuffer, out_buffers[0].cbBuffer);
+					FreeContextBuffer(out_buffers[0].pvBuffer);
+				}
+
+				goto Success;
+			}
+			case SEC_I_CONTINUE_NEEDED: {
+				xwrite(state->ofd, out_buffers[0].pvBuffer, out_buffers[0].cbBuffer);
+				FreeContextBuffer(out_buffers[0].pvBuffer);
+				if (in_buffers[1].BufferType != SECBUFFER_EXTRA) {
+					state->in_buffer_offset = 0;
+				}
+				break;
+			}
+			case SEC_E_INCOMPLETE_MESSAGE: {
+				int amount_read =
+					safe_read(state->ifd, state->in_buffer + state->in_buffer_offset,
+								sizeof(state->in_buffer) - state->in_buffer_offset);
+				if (amount_read <= 0) {
+					bb_error_msg_and_die("schannel: handshake read() failed");
+				}
+
+				state->in_buffer_offset += amount_read;
+				continue;
+			}
+			default: {
+				bb_error_msg_and_die("schannel: handshake failed: (0x%08lx): %s",
+					status, hresult_to_error_string(status));
+			}
+		}
+	}
+
+Success:
+	QueryContextAttributes(
+	    &state->ctx_handle, SECPKG_ATTR_STREAM_SIZES, &state->stream_sizes);
+	return;
+}
+
+void FAST_FUNC tls_run_copy_loop(tls_state_t *tls, unsigned flags) {
+	char buffer[65536];
+
+	struct pollfd pfds[2];
+
+	pfds[0].fd = STDIN_FILENO;
+	pfds[0].events = POLLIN;
+	pfds[1].fd = tls->ifd;
+	pfds[1].events = POLLIN;
+
+	for (;;) {
+		int nread;
+
+		if (safe_poll(pfds, 2, -1) < 0)
+			bb_simple_perror_msg_and_die("poll");
+
+		if (pfds[0].revents) {
+			nread = safe_read(STDIN_FILENO, buffer, sizeof(buffer));
+			if (nread < 1) {
+				pfds[0].fd = -1;
+				tls_disconnect(tls);
+				if (flags & TLSLOOP_EXIT_ON_LOCAL_EOF)
+					break;
+			} else {
+				tls_write(tls, buffer, nread);
+			}
+		}
+		if (pfds[1].revents) {
+			nread = tls_read(tls, buffer, sizeof(buffer));
+			if (nread < 1) {
+				tls_disconnect(tls);
+				break;
+			}
+			xwrite(STDOUT_FILENO, buffer, nread);
+		}
+	}
+}
+#endif
