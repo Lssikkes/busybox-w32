@@ -6,7 +6,20 @@
 //kbuild:lib-$(CONFIG_FEATURE_SETPRIV_CAPABILITIES) += capability.o
 //kbuild:lib-$(CONFIG_RUN_INIT) += capability.o
 
-#include <linux/capability.h>
+#ifdef __linux__
+# include <linux/capability.h>
+#else
+/* Stub for non-Linux platforms */
+# include "libbb.h"
+void FAST_FUNC getcaps(void *data UNUSED_PARAM) {}
+unsigned FAST_FUNC cap_name_to_number(const char *name UNUSED_PARAM) { return 0; }
+void FAST_FUNC printf_cap(const char *pfx UNUSED_PARAM, unsigned cap_no UNUSED_PARAM) {}
+# ifdef __APPLE__
+/* These functions won't be called on macOS, but we need to provide stubs */
+# endif
+#endif
+
+#ifdef __linux__
 // #include <sys/capability.h>
 // This header is in libcap, but the functions are in libc.
 // Comment in the header says this above capset/capget:
@@ -125,3 +138,4 @@ void FAST_FUNC getcaps(void *arg)
 	if (capget(&caps->header, caps->data) != 0)
 		bb_simple_perror_msg_and_die("capget");
 }
+#endif /* __linux__ */

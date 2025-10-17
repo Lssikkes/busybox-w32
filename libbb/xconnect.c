@@ -9,10 +9,13 @@
 #include <sys/types.h>
 #include <sys/socket.h> /* netinet/in.h needs it */
 #include <netinet/in.h>
+#include <arpa/inet.h>
 #include <net/if.h>
 #include <sys/un.h>
 #if ENABLE_IFPLUGD || ENABLE_FEATURE_MDEV_DAEMON || ENABLE_UEVENT
-# include <linux/netlink.h>
+# ifdef __linux__
+#  include <linux/netlink.h>
+# endif
 #endif
 #include "libbb.h"
 
@@ -415,6 +418,7 @@ int FAST_FUNC create_and_bind_dgram_or_die(const char *bindaddr, int port)
 
 
 #if ENABLE_IFPLUGD || ENABLE_FEATURE_MDEV_DAEMON || ENABLE_UEVENT
+#ifdef __linux__
 int FAST_FUNC create_and_bind_to_netlink(int proto, int grp, unsigned rcvbuf)
 {
 	struct sockaddr_nl sa;
@@ -448,7 +452,8 @@ int FAST_FUNC create_and_bind_to_netlink(int proto, int grp, unsigned rcvbuf)
 
 	return fd;
 }
-#endif
+#endif /* __linux__ */
+#endif /* ENABLE_IFPLUGD || ENABLE_FEATURE_MDEV_DAEMON || ENABLE_UEVENT */
 
 int FAST_FUNC create_and_connect_stream_or_die(const char *peer, int port)
 {

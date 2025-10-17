@@ -11,6 +11,14 @@
 
 unsigned long* FAST_FUNC get_malloc_cpu_affinity(int pid, unsigned *sz)
 {
+#ifdef __APPLE__
+	/* macOS doesn't have sched_getaffinity, return a mask with all CPUs */
+	unsigned sz_in_bytes = *sz;
+	unsigned long *mask = xmalloc(sz_in_bytes);
+	/* Set all bits to 1 to indicate all CPUs are available */
+	memset(mask, 0xFF, sz_in_bytes);
+	return mask;
+#else
 	unsigned long *mask = NULL;
 	unsigned sz_in_bytes = *sz;
 
@@ -26,4 +34,5 @@ unsigned long* FAST_FUNC get_malloc_cpu_affinity(int pid, unsigned *sz)
 	//bb_error_msg("get mask[0]:%lx sz_in_bytes:%d", mask[0], sz_in_bytes);
 	*sz = sz_in_bytes;
 	return mask;
+#endif
 }

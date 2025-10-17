@@ -257,9 +257,10 @@ quiet_cmd_link_o_target = LD      $@
 ifeq ($(CONFIG_PLATFORM_POSIX),y)
 # If the list of objects to link is empty, just create an empty built-in.o
 # -nostdlib is added to make "make LD=gcc ..." work (some people use that)
+# On macOS, ar requires at least one input file, so we create an empty .o first
 cmd_link_o_target = $(if $(strip $(obj-y)),\
 		$(LD) -nostdlib $(ld_flags) -r -o $@ $(filter $(obj-y), $^),\
-		rm -f $@; $(AR) rcs $@)
+		rm -f $@; printf '' | $(CC) -x c -c -o $@.tmp.o - && $(AR) rcs $@ $@.tmp.o && rm -f $@.tmp.o)
 else
 # In default builds of busybox-w32 all builtin targets have either
 # zero or one object files.  In the latter case copy the object to
@@ -288,7 +289,10 @@ endif # builtin-target
 #
 ifdef lib-target
 quiet_cmd_link_l_target = AR      $@
-cmd_link_l_target = rm -f $@; $(AR) $(EXTRA_ARFLAGS) rcs $@ $(lib-y)
+# On macOS, ar requires at least one input file, so we create an empty .o first if needed
+cmd_link_l_target = $(if $(strip $(lib-y)),\
+		rm -f $@; $(AR) $(EXTRA_ARFLAGS) rcs $@ $(lib-y),\
+		rm -f $@; printf '' | $(CC) -x c -c -o $@.tmp.o - && $(AR) $(EXTRA_ARFLAGS) rcs $@ $@.tmp.o && rm -f $@.tmp.o)
 
 $(lib-target): $(lib-y) FORCE
 	$(call if_changed,link_l_target)

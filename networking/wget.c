@@ -169,6 +169,7 @@
 //usage:     "\n	-Y on/off	Use proxy"
 
 #include "libbb.h"
+#include <arpa/inet.h>
 
 #if ENABLE_PLATFORM_MINGW32
 #include <windows.h>

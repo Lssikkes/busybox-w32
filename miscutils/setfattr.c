@@ -18,6 +18,26 @@
 #include <sys/xattr.h>
 #include "libbb.h"
 
+/* macOS has different xattr API - provide wrappers */
+#ifdef __APPLE__
+static int bb_setxattr(const char *path, const char *name, const void *value, size_t size, int flags) {
+	return setxattr(path, name, value, size, 0, flags);
+}
+static int bb_lsetxattr(const char *path, const char *name, const void *value, size_t size, int flags) {
+	return setxattr(path, name, value, size, 0, XATTR_NOFOLLOW | flags);
+}
+static int bb_removexattr(const char *path, const char *name) {
+	return removexattr(path, name, 0);
+}
+static int bb_lremovexattr(const char *path, const char *name) {
+	return removexattr(path, name, XATTR_NOFOLLOW);
+}
+# define setxattr bb_setxattr
+# define lsetxattr bb_lsetxattr
+# define removexattr bb_removexattr
+# define lremovexattr bb_lremovexattr
+#endif
+
 //usage:#define setfattr_trivial_usage
 //usage:       "[-h] -n|-x ATTR [-v VALUE] FILE..."
 //usage:#define setfattr_full_usage "\n\n"
