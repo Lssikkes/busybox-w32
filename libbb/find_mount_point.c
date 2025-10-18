@@ -86,6 +86,10 @@ struct mntent* FAST_FUNC find_mount_point(const char *name, int subdir_too)
 	}
 	endmntent(mtab_fp);
 #else
+	static struct mntdata *data = NULL;
+	const char *path;
+	char *current;
+
 	mountEntry = NULL;
 	path = NULL;
 	current = NULL;
