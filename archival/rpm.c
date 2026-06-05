@@ -374,6 +374,7 @@ int rpm_main(int argc, char **argv)
 	INIT_G();
 	INIT_PAGESIZE(G.pagesize);
 
+	GETOPT_RESET();
 	while ((opt = getopt(argc, argv, "iqpldc")) != -1) {
 		switch (opt) {
 		case 'i': /* First arg: Install mode, with q: Information */

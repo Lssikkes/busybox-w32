@@ -569,6 +569,7 @@ int unzip_main(int argc, char **argv)
 // -X	restore user:group ownership
 	opts = 0;
 	/* '-' makes getopt return 1 for non-options */
+	GETOPT_RESET();
 	while ((i = getopt(argc, argv, "-d:lnotpqxjvK")) != -1) {
 		switch (i) {
 		case 'd':  /* Extract to base directory */

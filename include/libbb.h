@@ -1659,10 +1659,13 @@ uint32_t getopt32long(char **argv, const char *optstring, const char *longopts, 
  * By ~2008, OpenBSD 3.4 was changed to survive glibc-like optind = 0
  * (to interpret it as if optreset was set).
  */
-#if 1 /*def __GLIBC__*/
-#define GETOPT_RESET() (optind = 0)
-#else /* BSD style */
-#define GETOPT_RESET() (optind = 1)
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+/* BSD getopt requires both optind=1 and optreset=1 to fully reset state */
+# define GETOPT_RESET() do { optind = 1; optreset = 1; } while (0)
+#elif 1 /*def __GLIBC__*/
+# define GETOPT_RESET() (optind = 0)
+#else
+# define GETOPT_RESET() (optind = 1)
 #endif
 
 

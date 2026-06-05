@@ -107,9 +107,9 @@ jobs:
           CROSS_COMPILER: ${{ matrix.cross_compiler }}
         run: |
           if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
-            make -j$(sysctl -n hw.ncpu)
+            make -k -j$(sysctl -n hw.ncpu)
           else
-            make -j$(nproc)
+            make -k -j$(nproc)
           fi
       
       - name: Rename output binary

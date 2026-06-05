@@ -105,6 +105,7 @@ int hexdump_main(int argc, char **argv)
 
 	/* We cannot use getopt32: in hexdump options are cumulative.
 	 * E.g. "hexdump -C -C file" should dump each line twice */
+	GETOPT_RESET();
 	while ((ch = getopt(argc, argv, hexdump_opts)) > 0) {
 		p = strchr(hexdump_opts, ch);
 		if (!p)

@@ -196,6 +196,7 @@ int head_main(int argc, char **argv)
 #endif
 
 	/* No size benefit in converting this to getopt32 */
+	GETOPT_RESET();
 	while ((opt = getopt(argc, argv, head_opts)) > 0) {
 		switch (opt) {
 #if ENABLE_FEATURE_FANCY_HEAD

@@ -3809,7 +3809,10 @@ int awk_main(int argc UNUSED_PARAM, char **argv)
 	fnhash = hash_init();
 	ahash = hash_init();
 
-	/* Cannot use getopt32: need to preserve order of -e / -f / -E / -i */
+	/* Cannot use getopt32: need to preserve order of -e / -f / -E / -i.
+	 * Must reset getopt state since we may be called as a busybox built-in
+	 * applet from ash, where optind is left over from the shell's own parsing. */
+	GETOPT_RESET();
 	while ((ch = getopt(argc, argv, OPTSTR_AWK)) >= 0) {
 		switch (ch) {
 		case 'F':

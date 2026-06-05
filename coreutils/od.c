@@ -200,6 +200,7 @@ int od_main(int argc, char **argv)
 	char *p;
 	dumper_t *dumper = alloc_dumper();
 
+	GETOPT_RESET();
 	while ((ch = getopt(argc, argv, od_opts)) > 0) {
 		if (ch == 'v') {
 			dumper->dump_vflag = ALL;

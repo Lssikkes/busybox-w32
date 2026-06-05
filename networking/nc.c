@@ -137,6 +137,7 @@ int nc_main(int argc, char **argv)
 	if (ENABLE_NC_SERVER || ENABLE_NC_EXTRA) {
 		/* getopt32 is _almost_ usable:
 		** it cannot handle "... -e PROG -prog-opt" */
+		GETOPT_RESET();
 		while ((opt = getopt(argc, argv,
 			"" IF_NC_SERVER("lp:") IF_NC_EXTRA("w:i:f:e:") )) > 0
 		) {

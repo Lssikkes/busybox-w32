@@ -136,6 +136,7 @@ int ipcrm_main(int argc, char **argv)
 #endif /* IPCRM_LEGACY */
 
 	/* process new syntax to conform with SYSV ipcrm */
+	GETOPT_RESET();
 	while ((c = getopt(argc, argv, "q:m:s:Q:M:S:")) != -1) {
 		int result;
 		int id;

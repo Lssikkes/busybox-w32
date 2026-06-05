@@ -60,7 +60,9 @@
  -H, --list-columns   list the available columns
 */
 #include "libbb.h"
-#include <mntent.h>
+#if HAVE_MNTENT_H
+# include <mntent.h>
+#endif
 
 struct blockdev_info {
 	char *name;

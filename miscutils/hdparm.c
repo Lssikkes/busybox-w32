@@ -2125,6 +2125,7 @@ int hdparm_main(int argc, char **argv)
 
 	INIT_G();
 
+	GETOPT_RESET();
 	while ((c = getopt(argc, argv, hdparm_options)) >= 0) {
 		flagcount++;
 		IF_FEATURE_HDPARM_GET_IDENTITY(get_IDentity |= (c == 'I'));
