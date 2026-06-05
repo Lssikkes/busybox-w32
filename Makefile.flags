@@ -238,6 +238,19 @@ LDFLAGS += $(strip $(subst ",,$(CONFIG_EXTRA_LDFLAGS)))
 #"))
 endif
 
+# aarch64 Linux kernels can be configured with 64 KB pages
+# (CONFIG_ARM64_64K_PAGES). A static, non-PIE binary whose PT_LOAD segments are
+# only 4 KB-aligned cannot be loaded by such kernels. Some aarch64 toolchains
+# (e.g. the bootlin uClibc cross-toolchains) default to a 4 KB max-page-size,
+# so force 64 KB segment alignment for aarch64 Linux targets. A 64 KB-aligned
+# binary still loads correctly on 4 KB- and 16 KB-page kernels.
+BB_TARGET_TRIPLE := $(shell $(CC) $(CFLAGS) -dumpmachine 2>/dev/null)
+ifneq (,$(findstring aarch64,$(BB_TARGET_TRIPLE)))
+ifneq (,$(findstring linux,$(BB_TARGET_TRIPLE)))
+LDFLAGS += -Wl,-z,max-page-size=0x10000
+endif
+endif
+
 # Busybox is a stack-fatty so make sure we increase default size
 # TODO: use "make stksizes" to find & fix big stack users
 # (we stole scripts/checkstack.pl from the kernel... thanks guys!)
