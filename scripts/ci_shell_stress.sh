@@ -5,9 +5,19 @@
 
 ROUNDS=${ROUNDS:-60}
 FUNCS=${FUNCS:-300}
+# A crashing build fails every round, and on Windows each crash is slow, so give up once the failure is clear
+MAX_FAIL=${MAX_FAIL:-10}
 
 fail=0
-report() { echo "FAIL $1: expected [$2] got [$3]"; fail=$((fail + 1)); }
+report() {
+	echo "FAIL $1: expected [$2] got [$3]"
+	fail=$((fail + 1))
+	if [ "$fail" -ge "$MAX_FAIL" ]; then
+		echo "stopping after $fail failures"
+		rm -rf "$dir"
+		exit 1
+	fi
+}
 expect() { [ "$2" = "$3" ] || report "$1" "$2" "$3"; }
 
 dir=$(mktemp -d)
@@ -46,7 +56,9 @@ done
 r=0
 while [ "$r" -lt "$ROUNDS" ]; do
 	k=$((r * 7 % FUNCS))
-	expect "subst f_$k" "XY-$k" "$(f_$k)"
+	out=$(f_$k)
+	expect "subst status f_$k" 0 "$?"
+	expect "subst f_$k" "XY-$k" "$out"
 	expect "nested subst" "deep$r" "$(echo "$(echo "$(echo deep$r)")")"
 	expect "subshell" "sub$r" "$( (echo sub$r) )"
 	expect "pipeline" "3" "$(printf 'a\nb\nc\n' | wc -l | tr -d ' ')"
