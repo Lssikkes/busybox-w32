@@ -25,5 +25,7 @@ custom_sed '^# CONFIG_FEATURE_WGET_HTTPS is not set' 'CONFIG_FEATURE_WGET_HTTPS=
 custom_sed '^# CONFIG_FEATURE_PREFER_APPLETS is not set' 'CONFIG_FEATURE_PREFER_APPLETS=y' .config
 custom_sed '^# CONFIG_FEATURE_SH_STANDALONE is not set' 'CONFIG_FEATURE_SH_STANDALONE=y' .config
 custom_sed '^# CONFIG_FEATURE_SH_NOFORK is not set' 'CONFIG_FEATURE_SH_NOFORK=y' .config
+# With applets preferred, `date` is always ours: support GNU date's %N, which scripts use for `date +%s%N` timing
+custom_sed '^# CONFIG_FEATURE_DATE_NANO is not set' 'CONFIG_FEATURE_DATE_NANO=y' .config
 # Self-contained HTTPS: never shell out to a system openssl, always use the internal TLS
 custom_sed '^CONFIG_FEATURE_WGET_OPENSSL=y' '# CONFIG_FEATURE_WGET_OPENSSL is not set' .config

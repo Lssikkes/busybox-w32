@@ -29,6 +29,7 @@ check sed "sed s/h/H/ f.txt" Hi
 check subshell "( cd / && echo sub )" sub
 check pipeline "printf 'b\\na\\n' | sort | head -n 1" a
 check touch-date "touch -d @86400 f.txt && date -r f.txt +%s" 86400
+check date-nanoseconds "date +%s%N | grep -qxE '[0-9]{19}' && echo nano" nano
 check xargs "echo a b | xargs echo X" "X a b"
 check env "env FOO=1 sh -c 'echo v\$FOO'" v1
 check find-exec "find f.txt -exec wc -c {} +" "f.txt"
