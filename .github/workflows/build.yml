@@ -147,6 +147,11 @@ jobs:
             os: windows-latest
           - artifact_name: busybox-windows-arm64-ucrt.exe
             os: windows-11-arm
+          # x64 binaries are also run on ARM64 Windows hosts, under emulation
+          - artifact_name: busybox-windows-x64-ucrt.exe
+            os: windows-11-arm
+          - artifact_name: busybox-windows-x64-msvcrt.exe
+            os: windows-11-arm
 
     steps:
       - name: Checkout source
@@ -166,6 +171,7 @@ jobs:
           PATH=/nonexistent "$PWD/bin/busybox" sh scripts/ci_smoke_test.sh
 
       - name: Shell stress test (Linux / macOS, empty PATH)
+        timeout-minutes: 15
         if: runner.os != 'Windows' && (success() || failure())
         run: PATH=/nonexistent "$PWD/bin/busybox" sh scripts/ci_shell_stress.sh
 
@@ -178,6 +184,7 @@ jobs:
           bin\busybox.exe sh scripts/ci_smoke_test.sh
 
       - name: Shell stress test (Windows)
+        timeout-minutes: 15
         if: runner.os == 'Windows' && (success() || failure())
         shell: cmd
         run: bin\busybox.exe sh scripts/ci_shell_stress.sh
