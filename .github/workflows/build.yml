@@ -165,6 +165,10 @@ jobs:
           chmod +x bin/busybox
           PATH=/nonexistent "$PWD/bin/busybox" sh scripts/ci_smoke_test.sh
 
+      - name: Shell stress test (Linux / macOS, empty PATH)
+        if: runner.os != 'Windows' && (success() || failure())
+        run: PATH=/nonexistent "$PWD/bin/busybox" sh scripts/ci_shell_stress.sh
+
       # cmd, not Git Bash, so nothing but busybox-w32 provides the applets
       - name: Smoke test (Windows)
         if: runner.os == 'Windows'
@@ -172,6 +176,11 @@ jobs:
         run: |
           move "bin\${{ matrix.artifact_name }}" bin\busybox.exe
           bin\busybox.exe sh scripts/ci_smoke_test.sh
+
+      - name: Shell stress test (Windows)
+        if: runner.os == 'Windows' && (success() || failure())
+        shell: cmd
+        run: bin\busybox.exe sh scripts/ci_shell_stress.sh
 
   release:
     needs: [build, test]
