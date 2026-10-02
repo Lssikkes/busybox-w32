@@ -128,8 +128,53 @@ jobs:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.artifact_name }}
 
-  release:
+  test:
     needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - artifact_name: busybox-linux-x64
+            os: ubuntu-latest
+          - artifact_name: busybox-linux-arm64
+            os: ubuntu-24.04-arm
+          - artifact_name: busybox-macos-arm64
+            os: macos-latest
+          - artifact_name: busybox-windows-x64-ucrt.exe
+            os: windows-latest
+          - artifact_name: busybox-windows-x64-msvcrt.exe
+            os: windows-latest
+          - artifact_name: busybox-windows-arm64-ucrt.exe
+            os: windows-11-arm
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Download BusyBox artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: bin
+
+      - name: Smoke test (Linux / macOS, empty PATH)
+        if: runner.os != 'Windows'
+        run: |
+          mv "bin/${{ matrix.artifact_name }}" bin/busybox
+          chmod +x bin/busybox
+          PATH=/nonexistent "$PWD/bin/busybox" sh scripts/ci_smoke_test.sh
+
+      # cmd, not Git Bash, so nothing but busybox-w32 provides the applets
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          move "bin\${{ matrix.artifact_name }}" bin\busybox.exe
+          bin\busybox.exe sh scripts/ci_smoke_test.sh
+
+  release:
+    needs: [build, test]
     runs-on: ubuntu-latest
     if: success() && github.ref == 'refs/heads/master'
     steps:
