@@ -18,6 +18,9 @@ cd "$dir" || exit 1
 echo hi >f.txt
 
 check echo "echo ok" ok
+# A child shell that crashes on exit still delivers its output, so check exit statuses and EXIT traps explicitly
+check subst-status "x=\$(echo hi); echo status=\$?" status=0
+check subshell-exit-trap "( trap 'echo trapped' EXIT; exit 4 )" trapped
 check cat "cat f.txt" hi
 check grep "grep hi f.txt" hi
 check awk "awk '{ print toupper(\$0) }' f.txt" HI
