@@ -7,6 +7,8 @@
 #include "libbb.h"
 #if ENABLE_PLATFORM_MINGW32
 # include "BB_VER.h"
+#elif defined(__APPLE__)
+# include <mach-o/dyld.h>
 #endif
 
 /* allow version to be extended, via CFLAGS */
@@ -30,7 +32,27 @@ const char bb_msg_standard_output[] ALIGN1 = "standard output";
 
 const char bb_hexdigits_upcase[] ALIGN1 = "0123456789ABCDEF";
 
-#if !ENABLE_PLATFORM_MINGW32
+#if defined(__APPLE__)
+/* Absolute so that re-exec still works after the shell changes directory */
+const char *get_busybox_exec_path(void)
+{
+	static const char *path;
+
+	if (!path) {
+		uint32_t size = 0;
+		char *exe;
+
+		_NSGetExecutablePath(NULL, &size);
+		exe = xmalloc(size);
+		if (_NSGetExecutablePath(exe, &size) == 0)
+			path = realpath(exe, NULL);
+		free(exe);
+		if (!path)
+			path = CONFIG_BUSYBOX_EXEC_PATH;
+	}
+	return path;
+}
+#elif !ENABLE_PLATFORM_MINGW32
 const char bb_busybox_exec_path[] ALIGN1 = CONFIG_BUSYBOX_EXEC_PATH;
 #else
 /* Some special shell variables are placed in the environment immediately

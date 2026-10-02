@@ -2736,6 +2736,10 @@ extern const char bb_path_wtmp_file[] ALIGN1;
 #define bb_busybox_exec_path get_busybox_exec_path()
 extern char bb_comm[];
 extern char bb_command_line[];
+#elif defined(__APPLE__)
+/* macOS has no /proc/self/exe to re-exec applets through */
+const char *get_busybox_exec_path(void);
+#define bb_busybox_exec_path get_busybox_exec_path()
 #else
 extern const char bb_busybox_exec_path[] ALIGN1;
 #endif
