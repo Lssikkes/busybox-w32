@@ -131,6 +131,8 @@ jobs:
   test:
     needs: build
     runs-on: ${{ matrix.os }}
+    env:
+      BB_TEST_NETWORK: 1
     strategy:
       fail-fast: false
       matrix:

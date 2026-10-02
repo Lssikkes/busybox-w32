@@ -1,6 +1,7 @@
 # Smoke test for a freshly built busybox, run natively on its own OS by CI:
 #   <busybox> sh scripts/ci_smoke_test.sh
 # Every command must resolve to a busybox applet, so on Linux and macOS CI runs this with an empty PATH.
+# Set BB_TEST_NETWORK=1 to also download over HTTP and HTTPS.
 
 pass=0
 fail=0
@@ -34,9 +35,14 @@ check find-exec "find f.txt -exec wc -c {} +" "f.txt"
 check timeout "timeout 5 sleep 0 && echo ok" ok
 check nested-sh "sh -c 'sh -c \"echo deep\"'" deep
 check subdir-reexec "mkdir s && cd s && echo x | tr x y" y
-check wget-http "timeout 30 wget -q -O - http://example.com" "Example Domain"
-check wget-https "timeout 30 wget -q -O - https://example.com" "Example Domain"
-check wget-https-quiet "timeout 30 wget -q -O /dev/null https://example.com && echo quiet" quiet
+check wget-applet "wget --help" "Usage: wget"
+
+# Needs internet access, which not every machine running this has
+if [ "${BB_TEST_NETWORK:-0}" = 1 ]; then
+	check wget-http "timeout 30 wget -q -O - http://example.com" "Example Domain"
+	check wget-https "timeout 30 wget -q -O - https://example.com" "Example Domain"
+	check wget-https-quiet "timeout 30 wget -q -O /dev/null https://example.com && echo quiet" quiet
+fi
 
 cd / && rm -rf "$dir"
 echo "passed=$pass failed=$fail"
