@@ -132,8 +132,11 @@ void print_e2flags_long(struct stat *sb)
 				case IO_REPARSE_TAG_SYMLINK:
 					ln = "Symbolic_Link";
 					break;
-				case IO_REPARSE_TAG_MOUNT_POINT:
+				case BB_REPARSE_TAG_JUNCTION:
 					ln = "Junction";
+					break;
+				case IO_REPARSE_TAG_MOUNT_POINT:
+					ln = "Mount_Point";
 					break;
 				case IO_REPARSE_TAG_APPEXECLINK:
 					ln = "App_Exec_Link";
@@ -174,8 +177,11 @@ void print_e2flags(struct stat *sb)
 			case IO_REPARSE_TAG_SYMLINK:
 				c = 'l';
 				break;
-			case IO_REPARSE_TAG_MOUNT_POINT:
+			case BB_REPARSE_TAG_JUNCTION:
 				c = 'j';
+				break;
+			case IO_REPARSE_TAG_MOUNT_POINT:
+				c = 'm';
 				break;
 			case IO_REPARSE_TAG_APPEXECLINK:
 				c = 'A';

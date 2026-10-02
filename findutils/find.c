@@ -467,7 +467,7 @@ IF_FEATURE_FIND_INUM(   ACTS(inum,  ino_t inode_num;))
 IF_FEATURE_FIND_SAMEFILE(ACTS(samefile, ino_t inode_num; dev_t device;))
 IF_FEATURE_FIND_USER(   ACTS(user,  uid_t uid;))
 IF_FEATURE_FIND_SIZE(   ACTS(size,  char size_char; off_t size;))
-IF_FEATURE_FIND_CONTEXT(ACTS(context, security_context_t context;))
+IF_FEATURE_FIND_CONTEXT(ACTS(context, char *context;))
 IF_FEATURE_FIND_PAREN(  ACTS(paren, action ***subexpr;))
 IF_FEATURE_FIND_PRUNE(  ACTS(prune))
 IF_FEATURE_FIND_QUIT(   ACTS(quit))
@@ -983,7 +983,7 @@ ACTF(empty)
 #if ENABLE_FEATURE_FIND_CONTEXT
 ACTF(context)
 {
-	security_context_t con;
+	char *con;
 	int rc;
 
 	if (G.recurse_flags & ACTION_FOLLOWLINKS) {
@@ -1670,6 +1670,9 @@ int find_main(int argc UNUSED_PARAM, char **argv)
 {
 	int i, firstopt;
 	char **past_HLP, *saved;
+#if ENABLE_PLATFORM_MINGW32
+	char stat_flag;
+#endif
 
 	INIT_G();
 
@@ -1738,6 +1741,13 @@ int find_main(int argc UNUSED_PARAM, char **argv)
 			 */
 		}
 	}
+#endif
+
+#if ENABLE_PLATFORM_MINGW32
+	/* Avoid expensive checks for executable mode when stat() is called.
+	 * The -executable test uses access() which isn't affected by this. */
+	stat_flag = BB_STAT_NO_HAS_EXEC_FORMAT;
+	stat(&stat_flag, NULL);
 #endif
 
 	for (i = 0; argv[i]; i++) {

@@ -76,7 +76,9 @@
 //usage:     "\n	-i SECS		Interval"
 //usage:     "\n	-A		Ping as soon as reply is received"
 //usage:     "\n	-t TTL		Set TTL"
+//usage:	IF_NOT_PLATFORM_MINGW32(
 //usage:     "\n	-I IFACE/IP	Source interface or IP address"
+//usage:	)
 //usage:     "\n	-W SEC		Seconds to wait for the first response (default 10)"
 //usage:     "\n			(after all -c CNT packets are sent)"
 //usage:     "\n	-w SEC		Seconds until ping exits (default:infinite)"
@@ -126,9 +128,15 @@
 # include <netinet/in.h> /* struct ip and friends */
 # include <netinet/ip.h>
 #endif
+#if !ENABLE_PLATFORM_MINGW32
 #include <netinet/ip_icmp.h>
+#endif
 #include "libbb.h"
 #include "common_bufsiz.h"
+
+#if ENABLE_PLATFORM_MINGW32
+#include "mingw_ip.h"
+#endif
 
 #ifdef __BIONIC__
 /* should be in netinet/ip_icmp.h */
@@ -154,7 +162,7 @@
 # define SOL_RAW IPPROTO_RAW
 #endif
 
-#if ENABLE_PING6
+#if ENABLE_PING6 && !ENABLE_PLATFORM_MINGW32
 # include <netinet/icmp6.h>
 /* I see RENUMBERED constants in bits/in.h - !!?
  * What a fuck is going on with libc? Is it a glibc joke? */
@@ -217,6 +225,9 @@ create_icmp_socket(void)
 #endif
 {
 	int sock;
+#if ENABLE_PLATFORM_MINGW32
+	mingw_socket(MINGW_INCLUDE_OVERLAPPED_ONCE, 0, 0);
+#endif
 #if ENABLE_PING6
 	if (lsa->u.sa.sa_family == AF_INET6)
 		sock = socket(AF_INET6, SOCK_RAW, IPPROTO_ICMPV6);
@@ -230,6 +241,11 @@ create_icmp_socket(void)
 	}
 
 	xmove_fd(sock, pingsock);
+
+#if ENABLE_PLATFORM_MINGW32
+	setsockopt_SOL_SOCKET_int(pingsock, SO_RCVTIMEO, 5000);
+	setsockopt_SOL_SOCKET_int(pingsock, SO_SNDTIMEO, 5000);
+#endif
 }
 
 #if !ENABLE_FEATURE_FANCY_PING
@@ -275,6 +291,10 @@ static void ping4(len_and_sockaddr *lsa)
 		c = recv(pingsock, G.packet, sizeof(G.packet), 0);
 #endif
 		if (c < 0) {
+#if ENABLE_PLATFORM_MINGW32
+			if (errno == WSAETIMEDOUT)
+				return noresp(0);
+#endif
 			if (errno != EINTR)
 				bb_simple_perror_msg("recvfrom");
 			continue;
@@ -296,15 +316,19 @@ static void ping6(len_and_sockaddr *lsa)
 {
 	struct icmp6_hdr *pkt;
 	int c;
+#if !ENABLE_PLATFORM_MINGW32
 	int sockopt;
+#endif
 
 	pkt = (struct icmp6_hdr *) G.packet;
 	/*memset(pkt, 0, sizeof(G.packet)); already is */
 	pkt->icmp6_type = ICMP6_ECHO_REQUEST;
 	pkt->icmp6_id = G.myid;
 
+#if !ENABLE_PLATFORM_MINGW32
 	sockopt = offsetof(struct icmp6_hdr, icmp6_cksum);
 	setsockopt_int(pingsock, SOL_RAW, IPV6_CHECKSUM, sockopt);
+#endif
 
 	xsendto(pingsock, G.packet, DEFDATALEN + sizeof(struct icmp6_hdr), &lsa->u.sa, lsa->len);
 
@@ -320,6 +344,10 @@ static void ping6(len_and_sockaddr *lsa)
 		c = recv(pingsock, G.packet, sizeof(G.packet), 0);
 #endif
 		if (c < 0) {
+#if ENABLE_PLATFORM_MINGW32
+			if (errno == WSAETIMEDOUT)
+				return noresp(0);
+#endif
 			if (errno != EINTR)
 				bb_simple_perror_msg("recvfrom");
 			continue;
@@ -369,8 +397,10 @@ static int common_ping_main(sa_family_t af, char **argv)
 	lsa = xhost_and_af2sockaddr(G.hostname, 0, AF_INET);
 #endif
 	/* Set timer _after_ DNS resolution */
+#if !ENABLE_PLATFORM_MINGW32
 	signal(SIGALRM, noresp);
 	alarm(5); /* give the host 5000ms to respond */
+#endif
 
 	create_icmp_socket(lsa);
 	G.myid = (uint16_t) getpid();
@@ -446,6 +476,10 @@ struct globals {
 #endif
 	} pingaddr;
 	unsigned char rcvd_tbl[MAX_DUP_CHK / 8];
+#if ENABLE_PLATFORM_MINGW32
+	unsigned long long timeouttill;
+	void (*nextfun)(int);
+#endif
 } FIX_ALIASING;
 #define G (*(struct globals*)bb_common_bufsiz1)
 #define if_index     (G.if_index    )
@@ -531,6 +565,7 @@ static void sendping_tail(void (*sp)(int), int size_pkt)
 
 	if (pingcount == 0 || G.ntransmitted < pingcount) {
 		/* Didn't send all pings yet - schedule next in -i SEC interval */
+#if !ENABLE_PLATFORM_MINGW32
 		struct itimerval i;
 		signal(SIGALRM, sp);
 		/*ualarm(G.interval_us, 0); - does not work for >=1sec on some libc */
@@ -539,6 +574,10 @@ static void sendping_tail(void (*sp)(int), int size_pkt)
 		i.it_value.tv_sec = G.interval_us / 1000000;
 		i.it_value.tv_usec = G.interval_us % 1000000;
 		setitimer(ITIMER_REAL, &i, NULL);
+#else
+		G.timeouttill = monotonic_us() + G.interval_us;
+		G.nextfun = sp;
+#endif
 	} else { /* -c NN, and all NN are sent */
 		/* Wait for the last ping to come back.
 		 * -W timeout: wait for a response in seconds.
@@ -552,8 +591,13 @@ static void sendping_tail(void (*sp)(int), int size_pkt)
 			if (expire == 0)
 				expire = 1;
 		}
+#if !ENABLE_PLATFORM_MINGW32
 		signal(SIGALRM, print_stats_and_exit);
 		alarm(expire);
+#else
+		G.timeouttill = monotonic_us() + expire * 1000000;
+		G.nextfun = print_stats_and_exit;
+#endif
 	}
 }
 
@@ -798,9 +842,25 @@ static void ping4(len_and_sockaddr *lsa)
 		socklen_t fromlen = (socklen_t) sizeof(from);
 		int c;
 
+#if ENABLE_PLATFORM_MINGW32
+		long long left = G.timeouttill - monotonic_us();
+		if (left <= 0) {
+			G.nextfun(0);
+			left = G.timeouttill - monotonic_us();
+		}
+		/* only let recvfrom delay _roughly_ that long */
+		setsockopt_SOL_SOCKET_int(pingsock, SO_RCVTIMEO, left < 1000 ? 1 : left / 1000);
+#endif
+
 		c = recvfrom(pingsock, G.rcv_packet, G.sizeof_rcv_packet, 0,
 				(struct sockaddr *) &from, &fromlen);
 		if (c < 0) {
+#if ENABLE_PLATFORM_MINGW32
+			if (errno == WSAEINTR) /* we have been interrupted by ^C and that has been handled */
+				exit(G.nreceived == 0 || (G.deadline_us && G.nreceived < pingcount));
+			if (errno == WSAETIMEDOUT)
+				continue;
+#endif
 			if (errno != EINTR)
 				bb_simple_perror_msg("recvfrom");
 			continue;
@@ -826,6 +886,7 @@ static void ping6(len_and_sockaddr *lsa)
 	if (source_lsa)
 		xbind(pingsock, &source_lsa->u.sa, source_lsa->len);
 
+#if !ENABLE_PLATFORM_MINGW32
 #ifdef ICMP6_FILTER
 	{
 		struct icmp6_filter filt;
@@ -840,6 +901,7 @@ static void ping6(len_and_sockaddr *lsa)
 			bb_error_msg_and_die("setsockopt(%s)", "ICMP6_FILTER");
 	}
 #endif /*ICMP6_FILTER*/
+#endif
 
 	/* enable broadcast pings */
 	setsockopt_broadcast(pingsock);
@@ -849,19 +911,27 @@ static void ping6(len_and_sockaddr *lsa)
 	sockopt = (datalen * 2) + 7 * 1024; /* giving it a bit of extra room */
 	setsockopt_SOL_SOCKET_int(pingsock, SO_RCVBUF, sockopt);
 
+#if !ENABLE_PLATFORM_MINGW32
 	sockopt = offsetof(struct icmp6_hdr, icmp6_cksum);
 	BUILD_BUG_ON(offsetof(struct icmp6_hdr, icmp6_cksum) != 2);
 	setsockopt_int(pingsock, SOL_RAW, IPV6_CHECKSUM, sockopt);
+#endif
 
 	/* request ttl info to be returned in ancillary data */
 	setsockopt_1(pingsock, SOL_IPV6, IPV6_HOPLIMIT);
 
+#if !ENABLE_PLATFORM_MINGW32
 	if (if_index)
 		pingaddr.sin6.sin6_scope_id = if_index;
+#endif
 
 	signal(SIGINT, print_stats_and_exit);
 
+#if ENABLE_PLATFORM_MINGW32
+	msg.msg_name = (struct sockaddr *)&from;
+#else
 	msg.msg_name = &from;
+#endif
 	msg.msg_namelen = sizeof(from);
 	msg.msg_iov = &iov;
 	msg.msg_iovlen = 1;
@@ -879,9 +949,25 @@ static void ping6(len_and_sockaddr *lsa)
 		struct cmsghdr *mp;
 		int hoplimit = -1;
 
+#if ENABLE_PLATFORM_MINGW32
+		long long left = G.timeouttill - monotonic_us();
+		if (left <= 0) {
+			G.nextfun(0);
+			left = G.timeouttill - monotonic_us();
+		}
+		/* only let recvmsg delay _roughly_ that long */
+		setsockopt_SOL_SOCKET_int(pingsock, SO_RCVTIMEO, left < 1000 ? 1 : left / 1000);
+#endif
+
 		msg.msg_controllen = sizeof(control_buf);
 		c = recvmsg(pingsock, &msg, 0);
 		if (c < 0) {
+#if ENABLE_PLATFORM_MINGW32
+			if (errno == WSAEINTR) /* we have been interrupted by ^C and that has been handled */
+				exit(G.nreceived == 0 || (G.deadline_us && G.nreceived < pingcount));
+			if (errno == WSAETIMEDOUT)
+				continue;
+#endif
 			if (errno != EINTR)
 				bb_simple_perror_msg("recvfrom");
 			continue;
@@ -954,12 +1040,16 @@ static int common_ping_main(int opt, char **argv)
 	if (opt & OPT_s)
 		datalen = xatou16(str_s); // -s
 	if (opt & OPT_I) { // -I
+#if ENABLE_PLATFORM_MINGW32
+		bb_error_msg_and_die("-I not supported");
+#else
 		if_index = if_nametoindex(str_I);
 		if (!if_index) {
 			/* TODO: I'm not sure it takes IPv6 unless in [XX:XX..] format */
 			source_lsa = xdotted2sockaddr(str_I, 0);
 			str_I = NULL; /* don't try to bind to device later */
 		}
+#endif
 	}
 	if (opt & OPT_p)
 		G.pattern = xstrtou_range(str_p, 16, 0, 255);

@@ -434,6 +434,7 @@ struct forkshell {
 	int nprocs;
 #if JOBS_WIN32
 	int jpnull;
+	int job_hack;
 #endif
 
 	/* optional data, used by forkshell_child */
@@ -4906,7 +4907,6 @@ waitpid_child(int *status, DWORD blocking)
 	int pid_nr = 0;
 	static HANDLE *proclist = NULL;
 	static int pid_max = 0;
-	pid_t pid = -1;
 	DWORD win_status, idx;
 	int i;
 
@@ -4927,16 +4927,24 @@ waitpid_child(int *status, DWORD blocking)
 
 	if (pid_nr) {
 		do {
-			idx = WaitForMultipleObjects(pid_nr, proclist, FALSE, blocking);
-			if (idx < pid_nr) {
-				GetExitCodeProcess(proclist[idx], &win_status);
-				*status = exit_code_to_wait_status(win_status);
-				pid = GetProcessId(proclist[idx]);
-				break;
+			for (i = 0; i < pid_nr; i += MAXIMUM_WAIT_OBJECTS) {
+				DWORD nr;
+				TRACE(("poll many: i %d, pidnr: %d, maxwait: %d, blocking: %d\n", i, pid_nr, MAXIMUM_WAIT_OBJECTS, blocking));
+				nr = i + MAXIMUM_WAIT_OBJECTS > pid_nr ?
+						(DWORD)(pid_nr - i) : MAXIMUM_WAIT_OBJECTS;
+				/* wait for 1ms when blocking */
+				idx = WaitForMultipleObjects(nr, proclist + i, FALSE, blocking);
+				TRACE(("poll result: %d\n", idx));
+				if (idx < MAXIMUM_WAIT_OBJECTS) {
+					idx += i;
+					GetExitCodeProcess(proclist[idx], &win_status);
+					*status = exit_code_to_wait_status(win_status);
+					return GetProcessId(proclist[idx]);
+				}
 			}
 		} while (blocking && !pending_int && waitcmd_int != 1);
 	}
-	return pid;
+	return -1;
 }
 #endif
 
@@ -6233,7 +6241,7 @@ forkparent(struct job *jp, union node *n, int mode, HANDLE proc)
 		backgndpid = pid;               /* set $! */
 		set_curjob(jp, CUR_RUNNING);
 #if ENABLE_PLATFORM_MINGW32
-		if (iflag && jp && jp->nprocs == 0)
+		if (rootshell && iflag && jp && jp->nprocs == 0)
 			fprintf(stderr, "[%d] %"PID_FMT"d\n", jobno(jp), pid);
 #endif
 	}
@@ -6331,6 +6339,7 @@ write2pipe(int pip[2], const char *p, size_t len)
 
 /* openhere needs this forward reference */
 static void expandhere(union node *arg);
+static void ifsfree(void);
 static int
 openhere(union node *redir)
 {
@@ -6765,6 +6774,17 @@ redirect(union node *redir, int flags)
 	//	preverrout_fd = copied_fd2;
 }
 
+static void
+restore_handler_expandarg(struct jmploc *savehandler, int err)
+{
+	exception_handler = savehandler;
+	if (err) {
+		if (exception_type != EXERROR)
+			longjmp(exception_handler->loc, 1);
+		ifsfree();
+	}
+}
+
 static int
 redirectsafe(union node *redir, int flags)
 {
@@ -6780,9 +6800,7 @@ redirectsafe(union node *redir, int flags)
 		exception_handler = &jmploc;
 		redirect(redir, flags);
 	}
-	exception_handler = savehandler;
-	if (err && exception_type != EXERROR)
-		longjmp(exception_handler->loc, 1);
+	restore_handler_expandarg(savehandler, err);
 	RESTORE_INT(saveint);
 	return err;
 }
@@ -11006,9 +11024,7 @@ evaltree(union node *n, int flags)
 			trap_depth--;
 			in_trap_ERR = 0;
 
-			exception_handler = savehandler;
-			if (err && exception_type != EXERROR)
-				longjmp(exception_handler->loc, 1);
+			restore_handler_expandarg(savehandler, err);
 
 			exitstatus = savestatus;
 		}
@@ -11873,18 +11889,16 @@ cdcmd(int argc UNUSED_PARAM, char **argv UNUSED_PARAM)
 static void
 print_all_cwd(void)
 {
-	FILE *mnt;
-	struct mntent *entry;
+	DWORD drives = GetLogicalDrives();
+	char drive[3] = "A:";
 	char buffer[PATH_MAX];
 
-	mnt = setmntent(bb_path_mtab_file, "r");
-	if (mnt) {
-		while ((entry=getmntent(mnt)) != NULL) {
-			entry->mnt_dir[2] = '\0';
-			if (get_drive_cwd(entry->mnt_dir, buffer, PATH_MAX) != NULL)
+	for (int i = 0; i < 26; ++i) {
+		if ((drives & 1 << i) != 0) {
+			drive[0] = 'A' + i;
+			if (get_drive_cwd(drive, buffer, PATH_MAX) != NULL)
 				out1fmt("%s\n", buffer);
 		}
-		endmntent(mnt);
 	}
 }
 #endif
@@ -12780,7 +12794,11 @@ preadfd(void)
 		INTOFF; /* no longjmp'ing out of read_line_input please */
 		nr = read_line_input(line_input_state, cmdedit_prompt, buf, IBUFSIZ);
 		if (bb_got_signal == SIGINT)
+# if ENABLE_PLATFORM_MINGW32
+			write_ctrl_c();
+# else
 			write(STDOUT_FILENO, "^C\n", 3);
+# endif
 		INTON; /* here non-blocked SIGINT will longjmp */
 		if (nr == 0) {
 			/* ^C pressed, "convert" to SIGINT */
@@ -12791,7 +12809,7 @@ preadfd(void)
 			 * is SIG_IGNed on startup, it stays SIG_IGNed)
 			 */
 # else
-			write(STDOUT_FILENO, "^C\n", 3);
+			write_ctrl_c();
 # endif
 			if (trap[SIGINT]) {
 # if ENABLE_PLATFORM_MINGW32
@@ -15456,9 +15474,7 @@ expandstr(const char *ps, int syntax_type)
 	result = stackblock();
 
 out:
-	exception_handler = savehandler;
-	if (err && exception_type != EXERROR)
-		longjmp(exception_handler->loc, 1);
+	restore_handler_expandarg(savehandler, err);
 
 	doprompt = saveprompt;
 	/* Try: PS1='`xxx(`' */
@@ -15560,6 +15576,10 @@ evalcmd(int argc UNUSED_PARAM, char **argv, int flags)
 	return 0;
 }
 
+#if ENABLE_PLATFORM_MINGW32
+static void exitreset(void);
+#endif
+
 /*
  * Read and execute commands.
  * "Top" is nonzero for the top level command loop;
@@ -15591,6 +15611,33 @@ cmdloop(int top)
 			terminal_mode(TRUE);
 #endif
 		}
+#if ENABLE_PLATFORM_MINGW32
+		if (inter) {
+			const char *cmd = lookupvar("PROMPT_COMMAND");
+
+			if (cmd && *cmd) {
+				struct jmploc *volatile savehandler;
+				struct jmploc jmploc;
+				int cmdstatus = exitstatus;
+
+				savehandler = exception_handler;
+				if (setjmp(jmploc.loc) == 0) {
+					exception_handler = &jmploc;
+					tokpushback = 0;
+					checkkwd = 0;
+					heredoclist = 0;
+					evalstring((char *)cmd, 0);
+				} else if (bb_got_signal == SIGINT) {
+					write(STDOUT_FILENO, "^C\n", 3);
+				} else {
+					exitreset();
+					exitshell();
+				}
+				exitstatus = cmdstatus;
+				exception_handler = savehandler;
+			}
+		}
+#endif
 		n = parsecmd(inter);
 #if DEBUG
 		if (DEBUG > 2 && debug && (n != NODE_EOF))
@@ -17045,6 +17092,10 @@ spawn_forkshell(struct forkshell *fs, struct job *jp, union node *n, int mode)
 	const char *argv[] = { "sh", "--fs", NULL, NULL };
 	intptr_t ret;
 
+#if JOBS_WIN32
+	fs->job_hack = njobs && fs->n && fs->n->type == NCMD && fs->n->ncmd.args &&
+			strcmp(fs->n->ncmd.args->narg.text, "jobs") == 0;
+#endif
 	new = forkshell_prepare(fs);
 	if (new == NULL)
 		goto fail;
@@ -17589,7 +17640,8 @@ forkshell_size(struct forkshell *fs)
 			ds = history_size(ds);
 #endif
 #if JOBS_WIN32
-		ds = jobtab_size(ds);
+		if (fs->job_hack)
+			ds = jobtab_size(ds);
 #endif
 	}
 	return ds;
@@ -17631,7 +17683,7 @@ forkshell_copy(struct forkshell *fs, struct forkshell *new)
 		}
 #endif
 #if JOBS_WIN32
-		if (njobs) {
+		if (fs->job_hack) {
 			new->jobtab = jobtab_copy();
 			SAVE_PTR(new->jobtab, "jobtab", NO_FREE);
 			new->njobs = njobs;
@@ -17916,6 +17968,9 @@ forkshell_init(const char *idstr)
 	njobs = fs->njobs;
 	curjob = fs->curjob;
 #endif
+#if ENABLE_SUW32
+	delayexit = 0;
+#endif
 
 	CLEAR_RANDOM_T(&random_gen); /* or else $RANDOM repeats in child */
 
@@ -17956,15 +18011,12 @@ forkshell_init(const char *idstr)
 	/* do job control only in root shell */
 	jobctl = 0;
 
-	if (fs->n && fs->n->type == NCMD && fs->n->ncmd.args &&
-			strcmp(fs->n->ncmd.args->narg.text, "jobs") == 0) {
+	if (fs->job_hack) {
 		TRACE(("Job hack\n"));
 		if (!fs->jpnull)
 			freejob(curjob);
 		goto end;
 	}
-	for (struct job *jp = curjob; jp; jp = jp->prev_job)
-		freejob(jp);
 #endif
  end:
 	forkshell_child(fs);

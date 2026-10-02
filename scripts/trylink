@@ -102,24 +102,28 @@ fi
 START_GROUP="-Wl,--start-group"
 END_GROUP="-Wl,--end-group"
 if ! check_cc "-Wl,--start-group -Wl,--end-group"; then
-    echo "Your linker does not support --start-group/--end-group"
+    echo "Your linker does not support --start-group"
     START_GROUP=""
     END_GROUP=""
 fi
 
-MAP_OPTS=""
-if check_cc "-Wl,-Map,mapfile.tmp"; then
-    MAP_OPTS="-Wl,-Map,$EXE.map"
-    rm -f mapfile.tmp
+WARN_COMMON="-Wl,--warn-common"
+if ! check_cc "-Wl,--warn-common"; then
+    echo "Your linker does not support --warn-common"
+    WARN_COMMON=""
 fi
-
-VERBOSE_OPTS=""
-if check_cc "-Wl,--verbose"; then
-    VERBOSE_OPTS="-Wl,--verbose"
+MAP_OPT="-Wl,-Map,$EXE.map"
+if ! check_cc "-Wl,-Map,/dev/null"; then
+    echo "Your linker does not support -Map"
+    MAP_OPT=""
 fi
-
+VERBOSE_OPT="-Wl,--verbose"
+if ! check_cc "-Wl,--verbose"; then
+    echo "Your linker does not support --verbose"
+    VERBOSE_OPT=""
+fi
 INFO_OPTS() {
-	echo "$WARN_COMMON $MAP_OPTS $VERBOSE_OPTS"
+	echo "$WARN_COMMON $MAP_OPT $VERBOSE_OPT"
 }
 
 # gold may not support --sort-common (yet)

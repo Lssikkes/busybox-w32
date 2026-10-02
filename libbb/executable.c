@@ -19,7 +19,8 @@ int FAST_FUNC file_is_executable(const char *name)
 	return (!access(name, X_OK) && !stat(name, &s) && S_ISREG(s.st_mode));
 #else
 	/* expand WIN32 implementation of access(2) */
-	return (!stat(name, &s) && S_ISREG(s.st_mode) && (s.st_mode & S_IXUSR));
+	return (!mingw_reset_stat(name, &s) && S_ISREG(s.st_mode) &&
+				(s.st_mode & S_IXUSR));
 #endif
 }
 

@@ -563,16 +563,17 @@ enum {	/* cp.c, mv.c, install.c depend on these values. CAREFUL when changing th
 #endif
 #define FILEUTILS_CP_OPTSTR "pdRfinlsLHarPvuTt:" IF_SELINUX("c")
 /* How many bits in FILEUTILS_CP_OPTSTR? */
-	FILEUTILS_CP_OPTBITS      = 18 - !ENABLE_SELINUX,
+	FILEUTILS_CP_OPTBITS      = (18 - !ENABLE_SELINUX),
 
-	FILEUTILS_RMDEST          = 1 << (19 - !ENABLE_SELINUX), /* cp --remove-destination */
-	/* bit 18 skipped for "cp --parents" */
+	FILEUTILS_RMDEST          = 1 << (18 - !ENABLE_SELINUX), /* cp --remove-destination */
+	/* bit 19 is used in cp for "cp --parents" */
 	FILEUTILS_REFLINK         = 1 << (20 - !ENABLE_SELINUX), /* cp --reflink=auto */
-	FILEUTILS_REFLINK_ALWAYS  = 1 << (21 - !ENABLE_SELINUX), /* cp --reflink[=always] */
+	/* bit 21 is used in cp for "cp --sparse=... */
 	/*
 	 * Hole. cp may have some bits set here,
 	 * they should not affect remove_file()/copy_file()
 	 */
+	FILEUTILS_REFLINK_ALWAYS  = 1 << 29, /* cp --reflink, --reflink=always */
 #if ENABLE_SELINUX
 	FILEUTILS_SET_SECURITY_CONTEXT = 1 << 30,
 #endif
@@ -814,8 +815,8 @@ typedef struct ioloop_state {
 	ioloop_state_t *io; \
 	int read_fd; \
 	int write_fd; \
-	int (*have_buffer_to_read_into)(void *this); \
-	int (*have_data_to_write)(void *this); \
+	int (*should_poll_read_fd)(void *this); \
+	int (*should_poll_write_fd)(void *this); \
 	int (*read)(void *this); \
 	int (*write)(void *this); \
 
@@ -1716,7 +1717,11 @@ extern smallint logmode;
 extern uint8_t xfunc_error_retval;
 extern void (*die_func)(void);
 void xfunc_die(void) NORETURN FAST_FUNC;
+#if !ENABLE_SHOW_USAGE
+#define bb_show_usage() xfunc_die()
+#else
 void bb_show_usage(void) NORETURN FAST_FUNC;
+#endif
 void bb_error_msg(const char *s, ...) __attribute__ ((format (printf, 1, 2)));
 void bb_simple_error_msg(const char *s) FAST_FUNC;
 void bb_error_msg_and_die(const char *s, ...) __attribute__ ((noreturn, format (printf, 1, 2)));
@@ -2019,10 +2024,10 @@ void getcaps(void *caps) FAST_FUNC;
 
 #if ENABLE_SELINUX
 extern void renew_current_security_context(void) FAST_FUNC;
-extern void set_current_security_context(security_context_t sid) FAST_FUNC;
-extern context_t set_security_context_component(security_context_t cur_context,
+extern void set_current_security_context(char *sid) FAST_FUNC;
+extern context_t set_security_context_component(char *cur_context,
 						char *user, char *role, char *type, char *range) FAST_FUNC;
-extern void setfscreatecon_or_die(security_context_t scontext) FAST_FUNC;
+extern void setfscreatecon_or_die(char *scontext) FAST_FUNC;
 extern void selinux_preserve_fcontext(int fdesc) FAST_FUNC;
 #else
 #define selinux_preserve_fcontext(fdesc) ((void)0)
@@ -2350,12 +2355,21 @@ enum { COMM_LEN = 16 };
 # endif
 #endif
 
+#if ENABLE_PLATFORM_MINGW32
+typedef struct pid_data_t {
+	DWORD pid;
+	unsigned long start_time;
+	unsigned long stime;
+	unsigned long utime;
+} pid_data_t;
+#endif
+
 typedef struct procps_status_t {
 #if !ENABLE_PLATFORM_MINGW32
 	DIR *dir;
 #else
 	HANDLE snapshot;
-	DWORD *pids;
+	pid_data_t *pids;
 	int npids;
 #endif
 	IF_FEATURE_SHOW_THREADS(DIR *task_dir;)
@@ -2450,7 +2464,9 @@ unsigned long FAST_FUNC fast_strtoul_10(char **endptr);
 unsigned long long FAST_FUNC fast_strtoull_16(char **endptr);
 char* FAST_FUNC skip_fields(char *str, int count);
 #if ENABLE_PLATFORM_MINGW32
-void get_process_times(DWORD pid, procps_status_t* sp);
+void get_process_times(DWORD pid, unsigned long* start_time,
+		unsigned long *stime,
+		unsigned long *utime);
 #endif
 
 

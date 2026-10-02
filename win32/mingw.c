@@ -223,6 +223,16 @@ static int get_dev_fd(const char *filename)
 	return -1;
 }
 
+static int get_dev_fd_or_std(const char *filename)
+{
+	int fd = get_dev_type(filename);
+
+	if (fd == DEV_STDIN || fd == DEV_STDOUT || fd == DEV_STDERR)
+		return fd;
+
+	return get_dev_fd(filename);
+}
+
 static int mingw_is_directory(const char *path);
 #undef open
 int mingw_open (const char *filename, int oflags, ...)
@@ -387,19 +397,50 @@ static inline struct timespec filetime_to_timespec(const FILETIME *ft)
 	return ts;
 }
 
-static inline mode_t file_attr_to_st_mode(DWORD attr)
+static inline mode_t file_attr_to_st_mode(int fd, DWORD attr)
 {
 	mode_t fMode = S_IRUSR|S_IRGRP|S_IROTH;
 	if (attr & FILE_ATTRIBUTE_DIRECTORY)
 		fMode |= (S_IFDIR|S_IRWXU|S_IRWXG|S_IRWXO) & ~(current_umask & 0022);
-	else if (attr & FILE_ATTRIBUTE_DEVICE)
-		fMode |= S_IFCHR|S_IWUSR|S_IWGRP|S_IWOTH;
-	else
+	else if (attr & FILE_ATTRIBUTE_DEVICE) {
+		if (GetFileType((HANDLE)_get_osfhandle(fd)) == FILE_TYPE_PIPE)
+			fMode |= S_IFIFO|S_IWUSR|S_IWGRP|S_IWOTH;
+		else
+			fMode |= S_IFCHR|S_IWUSR|S_IWGRP|S_IWOTH;
+	} else
 		fMode |= S_IFREG;
 	if (!(attr & (FILE_ATTRIBUTE_READONLY|FILE_ATTRIBUTE_DEVICE)))
 		fMode |= (S_IWUSR|S_IWGRP|S_IWOTH) & ~(current_umask & 0022);
 	return fMode;
 }
+
+#if ENABLE_FEATURE_UTF8_MANIFEST
+HANDLE mingw_find_first_file(LPCSTR lpFileName, LPVOID lpFindFileData)
+{
+# if !ENABLE_FEATURE_FAIL_IF_UTF8_MANIFEST_UNSUPPORTED
+	// UTF8 manifest is present but we may be running on Windows 8
+	// or below.  We need to check if FindExInfoBasic is supported.
+	HANDLE h;
+	FINDEX_INFO_LEVELS level = FindExInfoBasic;
+
+ retry:
+	h = FindFirstFileExA(lpFileName, level, lpFindFileData,
+							FindExSearchNameMatch, NULL, 0);
+	if (h == INVALID_HANDLE_VALUE &&
+			GetLastError() == ERROR_INVALID_PARAMETER &&
+			level == FindExInfoBasic) {
+		level = FindExInfoStandard;
+		SetLastError(0);
+		goto retry;
+	}
+	return h;
+# else
+	// FindExInfoBasic is definitely supported.
+	return FindFirstFileExA(lpFileName, FindExInfoBasic, lpFindFileData,
+							FindExSearchNameMatch, NULL, 0);
+# endif
+}
+#endif
 
 static int get_file_attr(const char *fname, WIN32_FILE_ATTRIBUTE_DATA *fdata)
 {
@@ -432,7 +473,7 @@ static int get_file_attr(const char *fname, WIN32_FILE_ATTRIBUTE_DATA *fdata)
 		HANDLE hnd;
 		WIN32_FIND_DATA fd;
 
-		if ((hnd=FindFirstFile(fname, &fd)) != INVALID_HANDLE_VALUE) {
+		if ((hnd=mingw_find_first_file(fname, &fd)) != INVALID_HANDLE_VALUE) {
 			fdata->dwFileAttributes =
 					fd.dwFileAttributes & ~FILE_ATTRIBUTE_DEVICE;
 			fdata->ftCreationTime = fd.ftCreationTime;
@@ -649,17 +690,20 @@ static uid_t file_owner(HANDLE fh, struct mingw_stat *buf)
 }
 #endif
 
-static DWORD get_symlink_data(DWORD attr, const char *pathname,
+static DWORD get_reparse_tag(DWORD attr, const char *pathname,
 					WIN32_FIND_DATAA *fbuf)
 {
 	if (attr & FILE_ATTRIBUTE_REPARSE_POINT) {
-		HANDLE handle = FindFirstFileA(pathname, fbuf);
+		HANDLE handle = mingw_find_first_file(pathname, fbuf);
 		if (handle != INVALID_HANDLE_VALUE) {
 			FindClose(handle);
 			if ((fbuf->dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
 				switch (fbuf->dwReserved0) {
-				case IO_REPARSE_TAG_SYMLINK:
 				case IO_REPARSE_TAG_MOUNT_POINT:
+					/* Distinguish between volume mount and junction */
+					if (!is_volume_mount(pathname))
+						fbuf->dwReserved0 = BB_REPARSE_TAG_JUNCTION;
+				case IO_REPARSE_TAG_SYMLINK:
 				case IO_REPARSE_TAG_APPEXECLINK:
 					return fbuf->dwReserved0;
 				}
@@ -673,9 +717,13 @@ static DWORD is_symlink(const char *pathname)
 {
 	WIN32_FILE_ATTRIBUTE_DATA fdata;
 	WIN32_FIND_DATAA fbuf;
+	DWORD tag;
 
-	if (!get_file_attr(pathname, &fdata))
-		return get_symlink_data(fdata.dwFileAttributes, pathname, &fbuf);
+	if (!get_file_attr(pathname, &fdata)) {
+		tag = get_reparse_tag(fdata.dwFileAttributes, pathname, &fbuf);
+		/* Volume mount point is not a symlink */
+		return tag == IO_REPARSE_TAG_MOUNT_POINT ? 0 : tag;
+	}
 	return 0;
 }
 
@@ -732,8 +780,9 @@ static int do_lstat(int follow, const char *file_name, struct mingw_stat *buf)
 
 	if (buf == NULL) {
 		/* NULL buf sets optimisation flags */
+		char oldflag = flag;
 		flag = *file_name;
-		return 0;
+		return oldflag;
 	}
 
 	while (!(err=get_file_attr(file_name, &fdata))) {
@@ -742,9 +791,9 @@ static int do_lstat(int follow, const char *file_name, struct mingw_stat *buf)
 		buf->st_gid = DEFAULT_GID;
 		buf->st_dev = buf->st_rdev = 0;
 		buf->st_attr = fdata.dwFileAttributes;
-		buf->st_tag = get_symlink_data(buf->st_attr, file_name, &findbuf);
+		buf->st_tag = get_reparse_tag(buf->st_attr, file_name, &findbuf);
 
-		if (buf->st_tag) {
+		if (buf->st_tag && buf->st_tag != IO_REPARSE_TAG_MOUNT_POINT) {
 			char *content;
 
 			if (follow) {
@@ -766,8 +815,10 @@ static int do_lstat(int follow, const char *file_name, struct mingw_stat *buf)
 			buf->st_ctim = filetime_to_timespec(&(findbuf.ftCreationTime));
 		}
 		else {
+			int fd = get_dev_fd_or_std(file_name);
+
 			/* The file is not a symlink. */
-			buf->st_mode = file_attr_to_st_mode(fdata.dwFileAttributes);
+			buf->st_mode = file_attr_to_st_mode(fd, fdata.dwFileAttributes);
 			if (S_ISREG(buf->st_mode) &&
 					(has_exe_suffix(file_name) ||
 					(!(buf->st_attr & FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS) &&
@@ -839,12 +890,30 @@ static int do_lstat(int follow, const char *file_name, struct mingw_stat *buf)
 
 int mingw_lstat(const char *file_name, struct mingw_stat *buf)
 {
-	return do_lstat(0, file_name, buf);
+	/* The '.' directory of a reparse point can be a link rather
+	 * than a directory.  Force the link to be resolved. */
+	return do_lstat(strcmp(bb_basename(file_name), ".") == 0, file_name, buf);
 }
 
 int mingw_stat(const char *file_name, struct mingw_stat *buf)
 {
 	return do_lstat(1, file_name, buf);
+}
+
+/* Reset the flags which control expensive stat() operations and
+ * call mingw_stat().  This is needed when a previous call has
+ * changed the flags from their default values but the current call
+ * needs that setting. */
+int mingw_reset_stat(const char *file_name, struct mingw_stat *buf)
+{
+	char newflag = 0;
+	char oldflag;
+	int ret;
+
+	oldflag = mingw_stat(&newflag, NULL);
+	ret = mingw_stat(file_name, buf);
+	mingw_stat(&oldflag, NULL);
+	return ret;
 }
 
 #undef st_atime
@@ -884,7 +953,7 @@ int FAST_FUNC mingw_fstat(int fd, struct mingw_stat *buf)
 	}
 
 	if (GetFileInformationByHandle(fh, &fdata)) {
-		buf->st_mode = file_attr_to_st_mode(fdata.dwFileAttributes);
+		buf->st_mode = file_attr_to_st_mode(-1, fdata.dwFileAttributes);
 		buf->st_attr = fdata.dwFileAttributes;
 		buf->st_size = fdata.nFileSizeLow |
 			(((off64_t)fdata.nFileSizeHigh)<<32);
@@ -931,7 +1000,7 @@ static int hutimens(HANDLE fh, const struct timespec times[2])
 	FILETIME *pft[2] = {&aft, &mft};
 	int i;
 
-	GetSystemTimeAsFileTime(&now);
+	GetSystemTimePreciseAsFileTime(&now);
 
 	if (times) {
 		for (i = 0; i < 2; ++i) {
@@ -1066,7 +1135,7 @@ int gettimeofday(struct timeval *tv, void *tz UNUSED_PARAM)
 	FILETIME ft;
 	long long hnsec;
 
-	GetSystemTimeAsFileTime(&ft);
+	GetSystemTimePreciseAsFileTime(&ft);
 	hnsec = filetime_to_hnsec(&ft);
 	tv->tv_sec = hnsec / 10000000;
 	tv->tv_usec = (hnsec % 10000000) / 10;
@@ -1081,7 +1150,7 @@ int FAST_FUNC clock_gettime(clockid_t clockid, struct timespec *tp)
 		errno = ENOSYS;
 		return -1;
 	}
-	GetSystemTimeAsFileTime(&ft);
+	GetSystemTimePreciseAsFileTime(&ft);
 	*tp = filetime_to_timespec(&ft);
 	return 0;
 }
@@ -1391,13 +1460,12 @@ long FAST_FUNC sysconf(int name)
 
 clock_t FAST_FUNC times(struct tms *buf)
 {
-	procps_status_t ps;
+	unsigned long start_time, stime, utime;
 
 	memset(buf, 0, sizeof(*buf));
-	memset(&ps, 0, sizeof(ps));
-	get_process_times(getpid(), &ps);
-	buf->tms_stime = ps.stime;
-	buf->tms_utime = ps.utime;
+	get_process_times(getpid(), &start_time, &stime, &utime);
+	buf->tms_stime = stime;
+	buf->tms_utime = utime;
 	return 0;
 }
 
@@ -1682,7 +1750,7 @@ static char *resolve_symlinks(char *path)
 char * FAST_FUNC realpath(const char *path, char *resolved_path)
 {
 	char buffer[MAX_PATH];
-	char *real_path, *p;
+	char *real_path;
 
 	/* enforce glibc pre-2.3 behaviour */
 	if (path == NULL || resolved_path == NULL) {
@@ -1692,11 +1760,7 @@ char * FAST_FUNC realpath(const char *path, char *resolved_path)
 
 	if (_fullpath(buffer, path, MAX_PATH) &&
 			(real_path=resolve_symlinks(buffer))) {
-		bs_to_slash(strcpy(resolved_path, real_path));
-		p = last_char_is(resolved_path, '/');
-		if (p && p > resolved_path && p[-1] != ':')
-			*p = '\0';
-		return resolved_path;
+		return bs_to_slash_strip_slash(strcpy(resolved_path, real_path));
 	}
 	return NULL;
 }
@@ -1704,10 +1768,6 @@ char * FAST_FUNC realpath(const char *path, char *resolved_path)
 static wchar_t *normalize_ntpath(wchar_t *wbuf)
 {
 	int i;
-
-	/* special case: don't normalise volume */
-	if (!wcsncmp(wbuf, L"\\??\\Volume{", 11))
-		return wbuf;
 
 	/* fix absolute path prefixes */
 	if (wbuf[0] == '\\') {
@@ -1748,7 +1808,13 @@ typedef struct {
 } APPEXECLINK_BUFFER;
 
 #define SRPB rptr->SymbolicLinkReparseBuffer
-char * FAST_FUNC xmalloc_readlink(const char *pathname)
+
+/* In normal use xmalloc_readlink() returns an allocated string or
+ * NULL.  As a special case, when the 'test' argument is TRUE it
+ * returns a string constant or NULL to indicate if the path
+ * refers to a volume mount point or not. This allows us to
+ * distinguish between volume mount points and junctions. */
+static char *xmalloc_readlink_test(const char *pathname, int test)
 {
 	HANDLE h;
 	char *buf;
@@ -1794,8 +1860,20 @@ char * FAST_FUNC xmalloc_readlink(const char *pathname)
 		}
 
 		if (name) {
+			int vol;
+
+			/* special case: don't normalise volume */
 			name[len] = 0;
-			name = normalize_ntpath(name);
+			vol = wcsncmp(name, L"\\??\\Volume{", 11) == 0;
+			if (test) {
+				if (rptr->ReparseTag == IO_REPARSE_TAG_MOUNT_POINT && vol)
+					return (char *)"";
+				else
+					return NULL;
+			} else if (!vol) {
+				name = normalize_ntpath(name);
+			}
+
 			bufsiz = WideCharToMultiByte(CP_ACP, 0, name, -1, NULL, 0, 0, 0);
 			if (bufsiz) {
 				buf = xmalloc(bufsiz);
@@ -1807,6 +1885,16 @@ char * FAST_FUNC xmalloc_readlink(const char *pathname)
 	}
 	errno = err_win_to_posix();
 	return NULL;
+}
+
+char * FAST_FUNC xmalloc_readlink(const char *pathname)
+{
+	return xmalloc_readlink_test(pathname, FALSE);
+}
+
+int is_volume_mount(const char *path)
+{
+	return xmalloc_readlink_test(path, TRUE) != NULL;
 }
 
 const char *get_busybox_exec_path(void)
@@ -2092,14 +2180,17 @@ int FAST_FUNC mingw_access(const char *name, int mode)
 		}
 	}
 
-	if (!mingw_stat(name, &s)) {
+	/* If we reach this point, mode has the X_OK flag.  Reset stat()
+	 * to its default behaviour, in case our caller has altered it. */
+	ret = -1;
+	if (!mingw_reset_stat(name, &s)) {
 		if ((s.st_mode&S_IXUSR)) {
-			return 0;
+			ret = 0;
+		} else {
+			errno = EACCES;
 		}
-		errno = EACCES;
 	}
-
-	return -1;
+	return ret;
 }
 
 int FAST_FUNC mingw_rmdir(const char *path)
@@ -2121,12 +2212,19 @@ void mingw_sync(void)
 	FILE *mnt;
 	struct mntent *entry;
 	char name[] = "\\\\.\\C:";
+	char *volname;
 
 	mnt = setmntent(bb_path_mtab_file, "r");
 	if (mnt) {
 		while ((entry=getmntent(mnt)) != NULL) {
-			name[4] = entry->mnt_dir[0];
-			h = CreateFile(name, GENERIC_READ | GENERIC_WRITE,
+			if (entry->mnt_volname[0]) {
+				volname = entry->mnt_volname;
+				volname[strlen(volname) - 1] = '\0';
+			} else {
+				name[4] = entry->mnt_dir[0];
+				volname = name;
+			}
+			h = CreateFile(volname, GENERIC_READ | GENERIC_WRITE,
 						FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
 						OPEN_EXISTING, 0, NULL);
 			if (h != INVALID_HANDLE_VALUE) {
@@ -2235,6 +2333,17 @@ char * FAST_FUNC bs_to_slash(char *str)
 	return str;
 }
 
+char * FAST_FUNC bs_to_slash_strip_slash(char *str)
+{
+	char *p;
+
+	bs_to_slash(str);
+	p = last_char_is(str, '/');
+	if (p && p > str && p[-1] != ':')
+		*p = '\0';
+	return str;
+}
+
 #if ENABLE_UNICODE_SUPPORT
 MINGW_BB_WCHAR_T * FAST_FUNC bs_to_slash_u(MINGW_BB_WCHAR_T *str)
 {
@@ -2314,6 +2423,18 @@ ULONGLONG CompatGetTickCount64(void)
 	}
 
 	return GetTickCount64();
+}
+
+/* precise time is only supported since win8 */
+#undef GetSystemTimePreciseAsFileTime
+void CompatGetSystemTimePreciseAsFileTime(FILETIME *ft)
+{
+	DECLARE_PROC_ADDR(VOID, GetSystemTimePreciseAsFileTime, FILETIME *);
+
+	if (INIT_PROC_ADDR(kernel32.dll, GetSystemTimePreciseAsFileTime))
+		GetSystemTimePreciseAsFileTime(ft);
+	else
+		GetSystemTimeAsFileTime(ft);
 }
 
 #if ENABLE_FEATURE_INSTALLER
@@ -2404,14 +2525,11 @@ const char * FAST_FUNC get_system_drive(void)
 	return getenv(BB_SYSTEMROOT) ?: drive;
 }
 
-int chdir_system_drive(void)
+void xchdir_system_drive(void)
 {
-	const char *sd = get_system_drive();
-	int ret = -1;
-
-	if (*sd)
-		ret = chdir(auto_string(concat_path_file(sd, "")));
-	return ret;
+	char *path = concat_path_file(get_system_drive(), "");
+	xchdir(path);
+	free(path);
 }
 
 /*

@@ -170,7 +170,7 @@ spawnveq(int mode, const char *path, char *const *argv, char *const *env)
 	 * Require that the file exists, is a regular file and is executable.
 	 * It may still contain garbage but we let spawnve deal with that.
 	 */
-	if (stat(path, &st) == 0) {
+	if (mingw_reset_stat(path, &st) == 0) {
 		if (!S_ISREG(st.st_mode) || !(st.st_mode&S_IXUSR)) {
 			errno = EACCES;
 			return -1;
@@ -189,10 +189,12 @@ spawnveq(int mode, const char *path, char *const *argv, char *const *env)
 
 	/* Special case:  spawnve won't execute a batch file if the first
 	 * argument is a relative path containing forward slashes.  Absolute
-	 * paths are fine but there's no harm in converting them too. */
-	if (has_bat_suffix(path)) {
-		slash_to_bs(new_argv[0]);
+	 * paths are fine.  It also produces unexpected results if asked to
+	 * run cmd.exe using a path with forward slashes.  Just convert
+	 * forward slashes to backslashes in all cases. */
+	slash_to_bs(new_argv[0]);
 
+	if (has_bat_suffix(path)) {
 		/* Another special case:  spawnve returns ENOEXEC when passed an
 		 * empty batch file.  Pretend it worked. */
 		if (st.st_size == 0) {
@@ -696,27 +698,42 @@ pid_t FAST_FUNC getppid(void)
 
 #define NPIDS 128
 
-void get_process_times(DWORD pid, procps_status_t* sp)
+void get_process_times(DWORD pid, unsigned long* start_time,
+		unsigned long *stime,
+		unsigned long *utime)
 {
+	DWORD flag;
 	HANDLE proc;
-	FILETIME crTime, exTime, keTime, usTime;
+	FILETIME crTime = {0, 0}, exTime, keTime, usTime;
 
-	if ((proc=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,
-				FALSE, pid))) {
+	*start_time = *stime = *utime = 0;
+	flag = PROCESS_QUERY_LIMITED_INFORMATION;
+ retry:
+	if ((proc=OpenProcess(flag, FALSE, pid))) {
 		if (GetProcessTimes(proc, &crTime, &exTime, &keTime, &usTime)) {
 			long long ticks_since_boot, boot_time, create_time;
 			FILETIME now;
 
+			// On Windows XP GetProcessTimes() appears to succeed
+			// but returns nonsensical data for PID 4, System.
+			if (crTime.dwHighDateTime == 0 && crTime.dwLowDateTime == 0)
+				return;
+
 			ticks_since_boot = GetTickCount64()/MS_PER_TICK;
-			GetSystemTimeAsFileTime(&now);
+			GetSystemTimePreciseAsFileTime(&now);
 			boot_time = filetime_to_ticks(&now) - ticks_since_boot;
 			create_time = filetime_to_ticks(&crTime);
 
-			sp->start_time = (unsigned long)(create_time - boot_time);
-			sp->stime = (unsigned long)filetime_to_ticks(&keTime);
-			sp->utime = (unsigned long)filetime_to_ticks(&usTime);
+			*start_time = (unsigned long)(create_time - boot_time);
+			*stime = (unsigned long)filetime_to_ticks(&keTime);
+			*utime = (unsigned long)filetime_to_ticks(&usTime);
 		}
 		CloseHandle(proc);
+	} else if (flag == PROCESS_QUERY_LIMITED_INFORMATION) {
+		// Windows XP doesn't support PROCESS_QUERY_LIMITED_INFORMATION,
+		// retry with PROCESS_QUERY_INFORMATION instead.
+		flag = PROCESS_QUERY_INFORMATION;
+		goto retry;
 	}
 }
 
@@ -731,6 +748,10 @@ UNUSED_PARAM
 	HANDLE proc;
 	const char *comm, *name;
 	BOOL ret;
+	int curr_pid_hit;
+	int parent_pid_hit;
+	unsigned long curr_start_time;
+	unsigned long parent_start_time;
 
 	pe.dwSize = sizeof(pe);
 	if (!sp) {
@@ -740,14 +761,20 @@ UNUSED_PARAM
 			free(sp);
 			return NULL;
 		}
+		// Read all pids into memory then rewind to the first process
 		if (Process32First(sp->snapshot, &pe)) {
 			int maxpids = 0;
 			do {
 				if (sp->npids == maxpids) {
 					maxpids += NPIDS;
-					sp->pids = xrealloc(sp->pids, sizeof(DWORD) * maxpids);
+					sp->pids = xrealloc(sp->pids, sizeof(pid_data_t) * maxpids);
 				}
-				sp->pids[sp->npids++] = pe.th32ProcessID;
+				sp->pids[sp->npids].pid = pe.th32ProcessID;
+				get_process_times(pe.th32ProcessID,
+						&sp->pids[sp->npids].start_time,
+						&sp->pids[sp->npids].stime,
+						&sp->pids[sp->npids].utime);
+				sp->npids++;
 			} while (Process32Next(sp->snapshot, &pe));
 		}
 		ret = Process32First(sp->snapshot, &pe);
@@ -768,13 +795,6 @@ UNUSED_PARAM
 	strcpy(sp->state, "   ");
 #endif
 
-#if ENABLE_FEATURE_PS_TIME || ENABLE_FEATURE_PS_LONG
-	if (flags & (PSSCAN_STIME|PSSCAN_UTIME|PSSCAN_START_TIME)) {
-		/* populate start_time, stime and utime members of sp */
-		get_process_times(pe.th32ProcessID, sp);
-	}
-#endif
-
 	if (flags & PSSCAN_UIDGID) {
 		/* if we can open the process it belongs to us */
 		if ((proc=OpenProcess(PROCESS_ALL_ACCESS, FALSE, pe.th32ProcessID))) {
@@ -785,13 +805,37 @@ UNUSED_PARAM
 	}
 
 	/* The parent of PID 0 is 0.  If the parent is a PID we haven't
-	 * seen set PPID to 1. */
+	 * seen, or a younger PID, set PPID to 1. */
 	sp->ppid = pe.th32ProcessID != 0;
+	curr_pid_hit = 0;
+	parent_pid_hit = 0;
+	curr_start_time = ULONG_MAX;
+	parent_start_time = ULONG_MAX;
 	for (int i = 0; i < sp->npids; ++i) {
-		if (sp->pids[i] == pe.th32ParentProcessID) {
+		if (sp->pids[i].pid == pe.th32ProcessID) {
+			++curr_pid_hit;
+			curr_start_time = sp->pids[i].start_time;
+#if ENABLE_FEATURE_PS_TIME || ENABLE_FEATURE_PS_LONG
+			if (flags & (PSSCAN_STIME|PSSCAN_UTIME|PSSCAN_START_TIME)) {
+				/* populate start_time, stime and utime members of sp */
+				sp->start_time = curr_start_time;
+				sp->stime = sp->pids[i].stime;
+				sp->utime = sp->pids[i].utime;
+			}
+#endif
+		} else if (sp->pids[i].pid == pe.th32ParentProcessID) {
+			++parent_pid_hit;
+			parent_start_time = sp->pids[i].start_time;
 			sp->ppid = pe.th32ParentProcessID;
+		}
+		if (curr_pid_hit && parent_pid_hit) {
 			break;
 		}
+	}
+	if (parent_start_time == ULONG_MAX ||
+			curr_start_time == ULONG_MAX ||
+			parent_start_time > curr_start_time) {
+		sp->ppid = pe.th32ProcessID != 0;
 	}
 	sp->pid = pe.th32ProcessID;
 

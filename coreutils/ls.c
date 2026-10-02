@@ -319,7 +319,7 @@ struct dnode {
 	const char *name;       /* usually basename, but think "ls -l dir/file" */
 	const char *fullname;   /* full name (usable for stat etc) */
 	struct dnode *dn_next;  /* for linked list */
-	IF_SELINUX(security_context_t sid;)
+	IF_SELINUX(char *sid;)
 	smallint fname_allocated;
 
 	/* Used to avoid re-doing [l]stat at printout stage
@@ -1374,6 +1374,7 @@ int ls_main(int argc UNUSED_PARAM, char **argv)
 
 #if ENABLE_PLATFORM_MINGW32
 	/* Make calls to stat(2)/lstat(2) as efficient as possible */
+	/* this isn't a NOFORK applet so we don't need to restore afterwards */
 	flag = 0;
 	if (opt & OPT_l) {
 # if ENABLE_FEATURE_EXTRA_FILE_DATA

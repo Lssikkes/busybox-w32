@@ -29,6 +29,8 @@ static inline unsigned int git_ntohl(unsigned int x) { return (unsigned int)ntoh
 #define ntohl git_ntohl
 int inet_aton(const char *cp, struct in_addr *inp) FAST_FUNC;
 int inet_pton(int af, const char *src, void *dst) FAST_FUNC;
+const char *mingw_inet_ntop (int, const void *__restrict, char *__restrict, socklen_t);
+#define inet_ntop mingw_inet_ntop
 
 /*
  * fcntl.h
@@ -295,7 +297,13 @@ int mingw_getpeername(int fd, struct sockaddr *sa, socklen_t *sz) FAST_FUNC;
 int mingw_gethostname(char *host, int namelen) FAST_FUNC;
 int mingw_getaddrinfo(const char *node, const char *service,
 			const struct addrinfo *hints, struct addrinfo **res) FAST_FUNC;
+int mingw_getnameinfo(const struct sockaddr *sa, socklen_t salen, char *host, int hostlen, char *svc, int svclen, int flags) FAST_FUNC;
 struct hostent *mingw_gethostbyaddr(const void *addr, socklen_t len, int type) FAST_FUNC;
+int mingw_sendto(int sockfd, const char *buf, int len, int flags, const struct sockaddr *to, int tolen) FAST_FUNC;
+int mingw_recv(int sockfd, char *buf, int len, int flags) FAST_FUNC;
+int mingw_recvfrom(int sockfd, char *buf, int len, int flags, struct sockaddr *from, int *fromlen) FAST_FUNC;
+
+int recvmsg(int fd, LPWSAMSG msg, int flags);
 
 #define socket mingw_socket
 #define connect mingw_connect
@@ -309,6 +317,15 @@ struct hostent *mingw_gethostbyaddr(const void *addr, socklen_t len, int type) F
 #define gethostname mingw_gethostname
 #define getaddrinfo mingw_getaddrinfo
 #define gethostbyaddr mingw_gethostbyaddr
+#define sendto mingw_sendto
+#define recv mingw_recv
+#define recvfrom mingw_recvfrom
+#define getnameinfo mingw_getnameinfo
+
+/* this is a constant that doesn't collide with AF_* */
+/* Used to add WSA_FLAG_OVERLAPPED to the next call to WSASocket */
+/* Use: mingw_socket(MINGW_INCLUDE_OVERLAPPED_ONCE, 0, 0); */
+#define MINGW_INCLUDE_OVERLAPPED_ONCE 0x512
 
 /*
  * sys/time.h
@@ -383,6 +400,8 @@ typedef off_t blkcnt_t;
 #define ino_t uint64_t
 #endif
 
+#define BB_REPARSE_TAG_JUNCTION (0x20000003L)
+
 struct mingw_stat {
 	dev_t     st_dev;
 	ino_t     st_ino;
@@ -407,8 +426,10 @@ struct mingw_stat {
 #define BB_STAT_COUNT_SUBDIRS 1
 #define BB_STAT_NO_HAS_EXEC_FORMAT 2
 
+int is_volume_mount(const char *path);
 int mingw_lstat(const char *file_name, struct mingw_stat *buf);
 int mingw_stat(const char *file_name, struct mingw_stat *buf);
+int mingw_reset_stat(const char *file_name, struct mingw_stat *buf);
 int mingw_fstat(int fd, struct mingw_stat *buf) FAST_FUNC;
 #undef lstat
 #undef stat
@@ -653,6 +674,8 @@ MINGW_BB_WCHAR_T *bs_to_slash_u(MINGW_BB_WCHAR_T *p) FAST_FUNC;
 #endif
 
 char *bs_to_slash(char *p) FAST_FUNC;
+char *bs_to_slash(char *p) FAST_FUNC;
+char *bs_to_slash_strip_slash(char *p) FAST_FUNC;
 void slash_to_bs(char *p) FAST_FUNC;
 void strip_dot_space(char *p) FAST_FUNC;
 size_t remove_cr(char *p, size_t len) FAST_FUNC;
@@ -661,13 +684,15 @@ int err_win_to_posix(void);
 
 ULONGLONG CompatGetTickCount64(void);
 #define GetTickCount64 CompatGetTickCount64
+void CompatGetSystemTimePreciseAsFileTime(FILETIME *ft);
+#define GetSystemTimePreciseAsFileTime CompatGetSystemTimePreciseAsFileTime
 
 int enumerate_links(const char *file, char *name) FAST_FUNC;
 
 int unc_root_len(const char *dir) FAST_FUNC;
 int root_len(const char *path) FAST_FUNC;
 const char *get_system_drive(void) FAST_FUNC;
-int chdir_system_drive(void);
+void xchdir_system_drive(void);
 char *xabsolute_path(char *path) FAST_FUNC;
 char *get_drive_cwd(const char *path, char *buffer, int size) FAST_FUNC;
 void fix_path_case(char *path) FAST_FUNC;
@@ -693,3 +718,9 @@ int elevation_state(void);
 void set_interp(int i) FAST_FUNC;
 int mingw_shell_execute(SHELLEXECUTEINFO *info) FAST_FUNC;
 void mingw_die_if_error(NTSTATUS status, const char *function_name) FAST_FUNC;
+
+#if ENABLE_FEATURE_UTF8_MANIFEST
+HANDLE mingw_find_first_file(LPCSTR lpFileName, LPVOID lpFindFileData);
+#else
+# define mingw_find_first_file FindFirstFileA
+#endif

@@ -329,6 +329,7 @@ struct globals {
 static int make(struct name *np, int level);
 static struct name *dyndep(struct name *np, struct rule *infrule,
 								const char **ptsuff);
+static void freerules(struct rule *rp);
 
 /*
  * Utility functions.
@@ -915,8 +916,9 @@ freemacros(void)
  * Get modification time of file or archive member
  */
 static void FAST_FUNC
-record_mtime(const file_header_t *file_header)
+record_mtime(archive_handle_t *archive_handle)
 {
+	const file_header_t *file_header = archive_handle->file_header;
 	ar_mtime = file_header->mtime;
 }
 

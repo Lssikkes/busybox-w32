@@ -477,7 +477,8 @@ static int at_end(void)
  */
 static void read_lines(void)
 {
-	int ndelay_set, eagain, fdflags;
+	int ndelay_set, eagain;
+	int UNINITIALIZED_VAR(fdflags, fdflags);
 	char *current_line, *p;
 	int w = width;
 	char last_terminated = terminated;
@@ -509,16 +510,16 @@ static void read_lines(void)
 	// Consider these cases:
 	// "less FILE": can set O_NONBLOCK on open.
 	// "true | less": can't.
-	// " { less; cat; } <FILE": can't. And must not confuse cat.
+	// "{ less; cat; } <FILE": can't. And must not confuse cat.
 	ndelay_set = -1; // "don't know whether stdin is nonblocking"
 	eagain = 0;
 
-	while (1) { /* read lines until we reach cur_fline or wanted_match */
+	while (1) { // read lines until we reach cur_fline or wanted_match
 		*p = '\0';
 		terminated = 0;
-		while (1) { /* read chars until we have a line */
+		while (1) { // read chars until we have a line
 			char c;
-			/* if no unprocessed chars left, eat more */
+			// if no unprocessed chars left, eat more
 			if (readpos >= read_size) {
 				// Read stdin, temporarily make it nonblocking (if it's not already)
 				if (ndelay_set < 0) {
@@ -1366,21 +1367,21 @@ static void remove_current_file(void)
 {
 	unsigned i;
 
-	if (num_files < 2)
-		return;
-
-	if (current_file != 1) {
-		change_file(-1);
-		for (i = 3; i <= num_files; i++)
-			files[i - 2] = files[i - 1];
+	if (num_files >= 2) {
+		if (current_file != 1) {
+			change_file(-1);
+			i = current_file + 1;
+		} else {
+			change_file(1);
+			current_file--;
+			i = 1;
+		}
+		for (; i < num_files; i++)
+			files[i - 1] = files[i];
 		num_files--;
-	} else {
-		change_file(1);
-		for (i = 2; i <= num_files; i++)
-			files[i - 2] = files[i - 1];
-		num_files--;
-		current_file--;
 	}
+	// fix status line: take new num_files into account
+	status_print();
 }
 
 static void colon_process(void)
